@@ -1,4 +1,4 @@
-"""Checks for the SwAV core: Sinkhorn assignments, model outputs and the swapped-prediction loss."""
+"""Checks for the SwAV core: Sinkhorn assignments, model outputs, the feature queue and the loss."""
 
 import pytest
 import torch
@@ -69,10 +69,21 @@ def test_sinkhorn_output_carries_no_gradient():
     assert not swav.sinkhorn(scores, EPSILON, NUM_ITERATIONS).requires_grad
 
 
-def test_model_returns_cosine_scores_for_every_crop():
+def random_projections(seed, batch_size=BATCH_SIZE):
+    """Unit-length projections for every crop, global crops first, as SwAVModel.forward returns them."""
+    generator = torch.Generator().manual_seed(seed)
+    return [F.normalize(torch.randn(batch_size, swav.PROJECTION_DIM, generator=generator), dim=1)
+            for _ in range(NUM_GLOBAL_CROPS + NUM_LOCAL_CROPS)]
+
+
+def test_model_returns_projections_and_cosine_scores_for_every_crop():
     model = swav.SwAVModel(NUM_PROTOTYPES)
-    crop_scores = model(random_crops(batch_size=4))
-    assert [tuple(scores.shape) for scores in crop_scores] == [(4, NUM_PROTOTYPES)] * len(random_crops())
+    crop_projections, crop_scores = model(random_crops(batch_size=4))
+    num_crops = NUM_GLOBAL_CROPS + NUM_LOCAL_CROPS
+    assert [tuple(projections.shape) for projections in crop_projections] == [(4, swav.PROJECTION_DIM)] * num_crops
+    for projections in crop_projections:
+        torch.testing.assert_close(projections.norm(dim=1), torch.ones(4))
+    assert [tuple(scores.shape) for scores in crop_scores] == [(4, NUM_PROTOTYPES)] * num_crops
     assert all(scores.abs().max() <= 1 + 1e-5 for scores in crop_scores)
 
 
@@ -129,8 +140,57 @@ def test_loss_is_the_mean_over_all_ten_target_predictor_pairs():
 
 def test_loss_trains_backbone_projector_and_prototypes():
     model = swav.SwAVModel(NUM_PROTOTYPES)
-    loss = swav.swav_loss(model(random_crops()), NUM_GLOBAL_CROPS, EPSILON, NUM_ITERATIONS, TEMPERATURE)
+    _, crop_scores = model(random_crops())
+    loss = swav.swav_loss(crop_scores, NUM_GLOBAL_CROPS, EPSILON, NUM_ITERATIONS, TEMPERATURE)
     loss.backward()
     assert torch.isfinite(loss)
     for name, parameter in model.named_parameters():
         assert parameter.grad is not None and parameter.grad.abs().sum() > 0, name
+
+
+@pytest.mark.parametrize("length", [0, 12])
+def test_queue_length_must_be_a_positive_multiple_of_the_batch_size(length):
+    with pytest.raises(ValueError):
+        swav.FeatureQueue(length, batch_size=8, num_global_crops=NUM_GLOBAL_CROPS, device="cpu")
+
+
+def test_queue_keeps_the_newest_global_crops_first_and_drops_the_oldest():
+    queue = swav.FeatureQueue(length=2 * BATCH_SIZE, batch_size=BATCH_SIZE,
+                              num_global_crops=NUM_GLOBAL_CROPS, device="cpu")
+    batches = [random_projections(seed) for seed in range(3)]
+    queue.push(batches[0])
+    assert not queue.is_full
+    queue.push(batches[1])
+    assert queue.is_full
+    queue.push(batches[2])
+    assert queue.is_full
+    for crop_index in range(NUM_GLOBAL_CROPS):
+        expected = torch.cat([batches[2][crop_index], batches[1][crop_index]])
+        torch.testing.assert_close(queue.projections[crop_index], expected, rtol=0, atol=0)
+
+
+def test_queue_stores_no_gradient_history():
+    queue = swav.FeatureQueue(BATCH_SIZE, BATCH_SIZE, NUM_GLOBAL_CROPS, device="cpu")
+    queue.push([projections.requires_grad_() for projections in random_projections(0)])
+    prototypes = torch.nn.Linear(swav.PROJECTION_DIM, NUM_PROTOTYPES, bias=False)
+    assert not queue.projections.requires_grad
+    assert not any(scores.requires_grad for scores in queue.scores(prototypes))
+
+
+def test_loss_with_queue_takes_targets_from_the_batch_rows_of_a_joint_sinkhorn():
+    crop_scores = [random_scores(seed) for seed in range(NUM_GLOBAL_CROPS + NUM_LOCAL_CROPS)]
+    queue_scores = [random_scores(100 + seed, batch_size=3 * BATCH_SIZE) for seed in range(NUM_GLOBAL_CROPS)]
+
+    def cross_entropy(target_index, predictor_index):
+        joint_scores = torch.cat([queue_scores[target_index], crop_scores[target_index]])
+        targets = swav.sinkhorn(joint_scores, EPSILON, NUM_ITERATIONS)[-BATCH_SIZE:]
+        log_predictions = F.log_softmax(crop_scores[predictor_index] / TEMPERATURE, dim=1)
+        return -(targets * log_predictions).sum(dim=1).mean()
+
+    pairs = [(target, predictor) for target in range(NUM_GLOBAL_CROPS)
+             for predictor in range(NUM_GLOBAL_CROPS + NUM_LOCAL_CROPS) if predictor != target]
+    expected = torch.stack([cross_entropy(*pair) for pair in pairs]).mean()
+    loss = swav.swav_loss(crop_scores, NUM_GLOBAL_CROPS, EPSILON, NUM_ITERATIONS, TEMPERATURE, queue_scores)
+    torch.testing.assert_close(loss, expected)
+    loss_without_queue = swav.swav_loss(crop_scores, NUM_GLOBAL_CROPS, EPSILON, NUM_ITERATIONS, TEMPERATURE)
+    assert not torch.isclose(loss, loss_without_queue)

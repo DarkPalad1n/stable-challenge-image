@@ -34,6 +34,9 @@ training budget, seeds and scorer.
   `distributed_sinkhorn` from the official SwAV code.
 - 2026-11-08: Baseline: 3 seeds x 30 epochs, 0.518 mean, 14.4 points over the
   floor.
+- 2026-11-08: Added an optional feature queue (`--queue-length`,
+  `--queue-start-epoch`). Ablation: a queue of 480 lowers the score by 3.6
+  points, so it stays off.
 
 ## Decisions
 | Setting | Value | Why |
@@ -48,7 +51,7 @@ training budget, seeds and scorer.
 | Batch size | 32 | Fits laptop training (MPS), 86 s per epoch |
 | Optimizer | AdamW, 5e-4, weight decay 0.05, no schedule | stable-pretraining benchmark |
 | Prototype freezing | First epoch | SwAV paper |
-| Queue | None yet | Paper uses one for small batches; first ablation |
+| Queue | Off (`--queue-length 0`) | A queue of 480 cost 3.6 points over 3 seeds |
 | Epochs | 30 | Score still rising at 30 |
 
 ## Run log
@@ -60,10 +63,13 @@ images). It does not cover held-out images or new classes.
 | 2026-11-06 | 02757d5 | Untrained ResNet9 | 0 | 0.3627 | - | Floor |
 | 2026-11-06 | 02757d5 | Untrained ResNet9 | 1 | 0.3893 | - | Floor |
 | 2026-11-06 | 02757d5 | Untrained ResNet9 | 2 | 0.3707 | - | Floor |
-| 2026-11-08 | this commit | SwAV baseline, 10 epochs | 0 | 0.4493 | - | Matches epoch 10 of the 30-epoch run |
-| 2026-11-08 | this commit | SwAV baseline, 30 epochs | 0 | 0.5173 | - | +15.5 over floor; epochs 21-27 timings distorted by battery sleep |
-| 2026-11-08 | this commit | SwAV baseline, 30 epochs | 1 | 0.5213 | - | +13.2 over floor |
-| 2026-11-08 | this commit | SwAV baseline, 30 epochs | 2 | 0.5160 | - | +14.5 over floor |
+| 2026-11-08 | 347b73e | SwAV baseline, 10 epochs | 0 | 0.4493 | - | Matches epoch 10 of the 30-epoch run |
+| 2026-11-08 | 347b73e | SwAV baseline, 30 epochs | 0 | 0.5173 | - | +15.5 over floor; epochs 21-27 timings distorted by battery sleep |
+| 2026-11-08 | 347b73e | SwAV baseline, 30 epochs | 1 | 0.5213 | - | +13.2 over floor |
+| 2026-11-08 | 347b73e | SwAV baseline, 30 epochs | 2 | 0.5160 | - | +14.5 over floor |
+| 2026-11-08 | this commit | Queue 480 from epoch 2, 30 epochs | 0 | 0.4693 | - | -4.8 vs baseline |
+| 2026-11-08 | this commit | Queue 480 from epoch 2, 30 epochs | 1 | 0.4840 | - | -3.7 vs baseline |
+| 2026-11-08 | this commit | Queue 480 from epoch 2, 30 epochs | 2 | 0.4947 | - | -2.1 vs baseline |
 
 Floor mean: 0.374. Chance: 3.4%.
 Baseline mean (30 epochs): 0.518 +/- 0.003; mean gain over the paired floor
@@ -71,6 +77,12 @@ Baseline mean (30 epochs): 0.518 +/- 0.003; mean gain over the paired floor
 Baseline settings: `uv run main.py --seed S --epochs 30` with all other
 defaults (batch 32, 300 prototypes). The model is initialised from the same
 weights as the floor of the same seed, so each gain is a paired comparison.
+
+Queue ablation: `--queue-length 480` (15 batches, the paper's 3840 / 256),
+started in epoch 2, all else as the baseline. Mean at 30 epochs 0.483 +/- 0.013,
+3.6 points below the baseline; lower for every seed. Mean over epochs 26-30:
+2.3 points below. Not tested: why. One guess is that with AdamW at batch 32 the
+network changes fast, so 15-batch-old projections give stale targets.
 
 ## Observations
 - Only 29 of the 30 classes appear among the labelled images.
@@ -84,10 +96,9 @@ weights as the floor of the same seed, so each gain is a paired comparison.
 - The loss still falls at epoch 30 (4.29 for seed 0).
 
 ## Next
-1. Add a feature queue, as the paper does for small batches, and compare it
-   with the baseline over 3 seeds.
-2. Run further ablations one at a time: augmentations (blur, stronger jitter),
-   prototypes, epochs, learning-rate schedule.
+1. Run further ablations one at a time, 3 seeds each, against the baseline:
+   augmentations (blur, stronger jitter), prototypes, epochs, learning-rate
+   schedule.
 
 ## Open questions
 - Exact presentation and paper dates

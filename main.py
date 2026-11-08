@@ -58,6 +58,11 @@ def parse_arguments(argv=None):
     swav_settings.add_argument("--temperature", type=float, default=0.1, help="softmax temperature of the predictions")
     swav_settings.add_argument("--freeze-prototypes-epochs", type=int, default=1,
                                help="number of initial epochs in which the prototypes are not updated")
+    swav_settings.add_argument("--queue-length", type=int, default=0,
+                               help="projections of recent batches added to Sinkhorn's input; "
+                                    "0 = no queue, otherwise a multiple of --batch-size")
+    swav_settings.add_argument("--queue-start-epoch", type=int, default=2,
+                               help="epoch in which the queue starts filling; it is used once full")
     return parser.parse_args(argv)
 
 
@@ -99,24 +104,34 @@ def save_json(path, content):
     path.write_text(json.dumps(content, indent=2) + "\n")
 
 
-def train_one_epoch(model, loader, optimizer, loss_function, device, freeze_prototypes):
+def train_one_epoch(model, loader, optimizer, loss_function, device, freeze_prototypes, queue=None):
     """Run one pass over the training data and return the mean loss.
 
     Args:
         model: The ``swav.SwAVModel`` being trained.
         loader: Multi-crop loader from ``swav_data.make_train_loader``.
         optimizer: Optimizer over all model parameters.
-        loss_function: Maps the model's crop scores to the scalar SwAV loss.
+        loss_function: Maps the model's crop scores (and ``queue_scores``) to the scalar
+            SwAV loss.
         device: Device the model lives on.
         freeze_prototypes: If true, the prototype gradients are discarded, so the
             optimizer leaves the prototypes unchanged (AdamW skips parameters without a
             gradient, weight decay included). The SwAV paper does this in the first epoch.
+        queue: Optional ``swav.FeatureQueue``. Every batch is pushed into it; once full,
+            its scores enter Sinkhorn before the batch is pushed, so it holds earlier
+            batches only.
     """
     model.train()
     total_loss = 0.0
     for crops in loader:
         model.normalize_prototypes()
-        loss = loss_function(model([crop.to(device) for crop in crops]))
+        crop_projections, crop_scores = model([crop.to(device) for crop in crops])
+        queue_scores = None
+        if queue is not None:
+            if queue.is_full:
+                queue_scores = queue.scores(model.prototypes)
+            queue.push(crop_projections)
+        loss = loss_function(crop_scores, queue_scores=queue_scores)
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         if freeze_prototypes:
@@ -149,6 +164,9 @@ def main(argv=None):
     if len(loader) == 0:
         raise ValueError(f"--batch-size {args.batch_size} is larger than the training set")
     model = swav.SwAVModel(args.prototypes).to(device)
+    queue = None
+    if args.queue_length > 0:
+        queue = swav.FeatureQueue(args.queue_length, args.batch_size, swav_data.NUM_GLOBAL_CROPS, device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     loss_function = functools.partial(
         swav.swav_loss,
@@ -163,7 +181,8 @@ def main(argv=None):
     for epoch in range(1, args.epochs + 1):
         epoch_start = time.time()
         freeze_prototypes = epoch <= args.freeze_prototypes_epochs
-        mean_loss = train_one_epoch(model, loader, optimizer, loss_function, device, freeze_prototypes)
+        epoch_queue = queue if epoch >= args.queue_start_epoch else None
+        mean_loss = train_one_epoch(model, loader, optimizer, loss_function, device, freeze_prototypes, epoch_queue)
         record = {"epoch": epoch, "loss": round(mean_loss, 4), "train_seconds": round(time.time() - epoch_start, 1)}
         if epoch == args.epochs or (args.eval_every > 0 and epoch % args.eval_every == 0):
             record["score"] = round(export_and_evaluate(model, args.output / "model.onnx", args.data), 4)

@@ -7,8 +7,12 @@ computed with the Sinkhorn-Knopp algorithm so that each batch spreads evenly ove
 prototypes. Every other crop of the same image must predict that target: the "swapped
 prediction" that gives the method its name.
 
-Only ``SwAVModel.backbone`` is exported for the challenge. The projector and the
-prototypes exist for the training objective alone.
+With small batches, a batch has too few crops to spread evenly over all prototypes.
+``FeatureQueue`` then adds the projections of recent batches to Sinkhorn's input, as the
+paper does for its small-batch runs.
+
+Only ``SwAVModel.backbone`` is exported for the challenge. The projector, the prototypes
+and the queue exist for the training objective alone.
 """
 
 import math
@@ -71,7 +75,7 @@ class SwAVModel(nn.Module):
         return torch.cat(embeddings_per_crop)
 
     def forward(self, crops):
-        """Score every crop against every prototype.
+        """Project every crop onto the unit sphere and score it against every prototype.
 
         All crops go through the projector together, so its BatchNorm sees global and
         local crops alike, as in the original implementation.
@@ -80,12 +84,69 @@ class SwAVModel(nn.Module):
             crops: List of crop batches as yielded by ``swav_data.make_train_loader``.
 
         Returns:
-            One tensor of shape [batch_size, num_prototypes] per crop, in the order of
-            ``crops``. Entries are cosine similarities, so they lie in [-1, 1].
+            Two lists with one entry per crop, in the order of ``crops``:
+            projections, each of shape [batch_size, PROJECTION_DIM] and of unit length;
+            scores, each of shape [batch_size, num_prototypes]. Scores are cosine
+            similarities, so they lie in [-1, 1].
         """
         batch_size = crops[0].shape[0]
         projections = F.normalize(self.projector(self.embed_crops(crops)), dim=1)
-        return list(self.prototypes(projections).split(batch_size))
+        crop_scores = self.prototypes(projections)
+        return list(projections.split(batch_size)), list(crop_scores.split(batch_size))
+
+
+class FeatureQueue:
+    """Projections of the global crops from the most recent batches, newest first.
+
+    Their scores are prepended to the batch's scores before Sinkhorn-Knopp, so the even
+    spread over the prototypes is enforced over many more crops than one batch holds.
+    The stored projections are re-scored with the current prototypes at every step;
+    they never receive gradients.
+    """
+
+    def __init__(self, length, batch_size, num_global_crops, device):
+        """Create an empty queue.
+
+        Args:
+            length: Number of projections kept per global crop. Must be a positive
+                multiple of ``batch_size``, so whole batches enter and leave.
+            batch_size: Number of images per training batch.
+            num_global_crops: Number of leading crops whose projections are stored.
+            device: Device the projections live on.
+        """
+        if length <= 0 or length % batch_size != 0:
+            raise ValueError(f"queue length {length} must be a positive multiple of the batch size {batch_size}")
+        self.length = length
+        self.num_global_crops = num_global_crops
+        self.projections = torch.zeros(num_global_crops, length, PROJECTION_DIM, device=device)
+        self.num_stored = 0
+
+    @property
+    def is_full(self):
+        """True once ``length`` projections are stored; only a full queue is used."""
+        return self.num_stored == self.length
+
+    @torch.no_grad()
+    def scores(self, prototypes):
+        """Score the stored projections against the current prototypes.
+
+        Returns:
+            One tensor of shape [length, num_prototypes] per global crop.
+        """
+        return [prototypes(projections) for projections in self.projections]
+
+    @torch.no_grad()
+    def push(self, crop_projections):
+        """Store the global crops' projections of this batch and drop the oldest batch.
+
+        Args:
+            crop_projections: Projections per crop as returned by ``SwAVModel.forward``,
+                global crops first.
+        """
+        newest = torch.stack(crop_projections[:self.num_global_crops])
+        batch_size = newest.shape[1]
+        self.projections = torch.cat([newest, self.projections[:, :-batch_size]], dim=1)
+        self.num_stored = min(self.num_stored + batch_size, self.length)
 
 
 @torch.no_grad()
@@ -116,7 +177,7 @@ def sinkhorn(scores, epsilon, num_iterations):
     return torch.exp(log_assignments + math.log(batch_size))
 
 
-def swav_loss(crop_scores, num_global_crops, epsilon, num_iterations, temperature):
+def swav_loss(crop_scores, num_global_crops, epsilon, num_iterations, temperature, queue_scores=None):
     """SwAV's swapped-prediction loss (paper, eq. 1 and 2).
 
     Targets come from the global crops only; the paper found that targets from small crops
@@ -125,18 +186,25 @@ def swav_loss(crop_scores, num_global_crops, epsilon, num_iterations, temperatur
     and the loss is their mean.
 
     Args:
-        crop_scores: Output of ``SwAVModel.forward``, global crops first.
+        crop_scores: Scores per crop as returned by ``SwAVModel.forward``, global crops first.
         num_global_crops: How many leading entries of ``crop_scores`` are global crops.
         epsilon: Sinkhorn entropy regularisation.
         num_iterations: Sinkhorn normalisation rounds.
         temperature: Softmax temperature of the predictions.
+        queue_scores: Optional output of ``FeatureQueue.scores``. If given, Sinkhorn runs
+            on the queue's scores followed by the batch's, and only the batch's
+            assignments are kept as targets.
 
     Returns:
         Scalar tensor.
     """
+    batch_size = crop_scores[0].shape[0]
     cross_entropies = []
     for target_index in range(num_global_crops):
-        targets = sinkhorn(crop_scores[target_index], epsilon, num_iterations)
+        sinkhorn_input = crop_scores[target_index]
+        if queue_scores is not None:
+            sinkhorn_input = torch.cat([queue_scores[target_index], sinkhorn_input])
+        targets = sinkhorn(sinkhorn_input, epsilon, num_iterations)[-batch_size:]
         for predictor_index, scores in enumerate(crop_scores):
             if predictor_index == target_index:
                 continue

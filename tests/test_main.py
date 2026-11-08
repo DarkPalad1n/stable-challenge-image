@@ -1,4 +1,4 @@
-"""Checks for the training script: outputs, reproducibility, prototype freezing, offline retrain."""
+"""Checks for the training script: outputs, reproducibility, prototype freezing, queue, offline retrain."""
 
 import json
 import shutil
@@ -66,8 +66,8 @@ def test_prototypes_move_only_when_not_frozen(eval_data, freeze_prototypes):
     loader = swav_data.make_train_loader(str(eval_data), batch_size=8, seed=0)
     prototypes_before = model.prototypes.weight.detach().clone()
 
-    def loss_function(crop_scores):
-        return swav.swav_loss(crop_scores, swav_data.NUM_GLOBAL_CROPS, 0.05, 3, 0.1)
+    def loss_function(crop_scores, queue_scores):
+        return swav.swav_loss(crop_scores, swav_data.NUM_GLOBAL_CROPS, 0.05, 3, 0.1, queue_scores)
 
     main.train_one_epoch(model, loader, optimizer, loss_function, torch.device("cpu"), freeze_prototypes)
     largest_change = (model.prototypes.weight - prototypes_before).abs().max().item()
@@ -77,6 +77,41 @@ def test_prototypes_move_only_when_not_frozen(eval_data, freeze_prototypes):
         assert largest_change < 1e-6
     else:
         assert largest_change > 1e-3
+
+
+def test_queue_changes_training_from_its_start_epoch_only(eval_data, tmp_path):
+    # 41 images at batch size 8 give 5 steps per epoch; a queue of 16 is full after 2 of them.
+    without_queue = train(eval_data, tmp_path / "without", "--epochs", "2")
+    with_queue = train(eval_data, tmp_path / "with", "--epochs", "2", "--queue-length", "16", "--queue-start-epoch", "2")
+    assert with_queue[0]["loss"] == without_queue[0]["loss"]
+    assert with_queue[1]["loss"] != without_queue[1]["loss"]
+
+
+def test_queue_holds_only_earlier_batches_newest_first(eval_data):
+    # With frozen prototypes, a stored projection scores exactly as it did in its own step.
+    torch.manual_seed(0)
+    model = swav.SwAVModel(num_prototypes=10)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-2, weight_decay=0.05)
+    loader = swav_data.make_train_loader(str(eval_data), batch_size=8, seed=0)
+    queue = swav.FeatureQueue(16, 8, swav_data.NUM_GLOBAL_CROPS, device="cpu")
+    steps = []
+
+    def recording_loss(crop_scores, queue_scores):
+        steps.append(([scores.detach() for scores in crop_scores], queue_scores))
+        return swav.swav_loss(crop_scores, swav_data.NUM_GLOBAL_CROPS, 0.05, 3, 0.1, queue_scores)
+
+    main.train_one_epoch(model, loader, optimizer, recording_loss, torch.device("cpu"), True, queue)
+    assert [queue_scores is None for _, queue_scores in steps] == [True, True, False, False, False]
+    for step in range(2, len(steps)):
+        queue_scores = steps[step][1]
+        for crop_index in range(swav_data.NUM_GLOBAL_CROPS):
+            expected = torch.cat([steps[step - 1][0][crop_index], steps[step - 2][0][crop_index]])
+            torch.testing.assert_close(queue_scores[crop_index], expected)
+
+
+def test_queue_length_is_checked_before_training(eval_data, tmp_path):
+    with pytest.raises(ValueError, match="multiple of the batch size"):
+        train(eval_data, tmp_path / "run", "--epochs", "1", "--queue-length", "12")
 
 
 def test_retrain_works_with_only_the_python_sources(eval_data, tmp_path):
