@@ -27,6 +27,13 @@ training budget, seeds and scorer.
 - 2026-11-06: Added `make_random_init.py` and measured the score floor.
 - 2026-11-06: Added `swav_data.py` with 2 global crops (96 px) and 4 local
   crops (48 px).
+- 2026-11-08: Added `swav.py` (model, Sinkhorn-Knopp, swapped-prediction loss)
+  and `main.py` (seeded training, ONNX export, probe score per epoch).
+  `swav_data.py` now returns unlabelled images and a seeded loader.
+- 2026-11-08: Added tests for all three files. Sinkhorn matches
+  `distributed_sinkhorn` from the official SwAV code.
+- 2026-11-08: Baseline: 3 seeds x 30 epochs, 0.518 mean, 14.4 points over the
+  floor.
 
 ## Decisions
 | Setting | Value | Why |
@@ -38,7 +45,11 @@ training budget, seeds and scorer.
 | Blur, solarize | Off for now | Test later as ablations |
 | Prototypes | 300 | Starting choice for 30 classes, 7,500 images |
 | Epsilon, iterations, temperature | 0.05, 3, 0.1 | SwAV paper |
-| Batch size, optimizer | 128, AdamW at 5e-4 | stable-pretraining benchmark |
+| Batch size | 32 | Fits laptop training (MPS), 86 s per epoch |
+| Optimizer | AdamW, 5e-4, weight decay 0.05, no schedule | stable-pretraining benchmark |
+| Prototype freezing | First epoch | SwAV paper |
+| Queue | None yet | Paper uses one for small batches; first ablation |
+| Epochs | 30 | Score still rising at 30 |
 
 ## Run log
 Local score = `evaluate.py` on `data/train.parquet` (leave-one-out on labelled
@@ -49,20 +60,34 @@ images). It does not cover held-out images or new classes.
 | 2026-11-06 | 02757d5 | Untrained ResNet9 | 0 | 0.3627 | - | Floor |
 | 2026-11-06 | 02757d5 | Untrained ResNet9 | 1 | 0.3893 | - | Floor |
 | 2026-11-06 | 02757d5 | Untrained ResNet9 | 2 | 0.3707 | - | Floor |
+| 2026-11-08 | this commit | SwAV baseline, 10 epochs | 0 | 0.4493 | - | Matches epoch 10 of the 30-epoch run |
+| 2026-11-08 | this commit | SwAV baseline, 30 epochs | 0 | 0.5173 | - | +15.5 over floor; epochs 21-27 timings distorted by battery sleep |
+| 2026-11-08 | this commit | SwAV baseline, 30 epochs | 1 | 0.5213 | - | +13.2 over floor |
+| 2026-11-08 | this commit | SwAV baseline, 30 epochs | 2 | 0.5160 | - | +14.5 over floor |
 
 Floor mean: 0.374. Chance: 3.4%.
+Baseline mean (30 epochs): 0.518 +/- 0.003; mean gain over the paired floor
+14.4 +/- 1.1 points. Means at 10 and 20 epochs: 0.451 and 0.478.
+Baseline settings: `uv run main.py --seed S --epochs 30` with all other
+defaults (batch 32, 300 prototypes). The model is initialised from the same
+weights as the floor of the same seed, so each gain is a paired comparison.
 
 ## Observations
 - Only 29 of the 30 classes appear among the labelled images.
 - Three untrained models span 2.7 points, so small gaps need several seeds.
+- The score jumps 2 to 6 points between neighbouring epochs, so the spread
+  at epoch 30 (0.003) is luck. Treat gains below about 2 points as noise.
+- We report the last epoch, never the best one: picking an epoch by score
+  would use labels for model selection.
+- Runs are exactly repeatable on MPS: three runs with the same seed gave
+  identical ONNX files, even with a sleep interruption.
+- The loss still falls at epoch 30 (4.29 for seed 0).
 
 ## Next
-1. Build the SwAV model: targets from global crops only, prototypes frozen for
-   the first epoch.
-2. Smoke test about 10 steps on the laptop.
-3. Export the encoder only, then run `test_submission.py` and `evaluate.py`.
-4. Do a first real run on a GPU and compare it with the floor.
-5. Run ablations: prototypes, local crops, target crops, epsilon, augmentations.
+1. Add a feature queue, as the paper does for small batches, and compare it
+   with the baseline over 3 seeds.
+2. Run further ablations one at a time: augmentations (blur, stronger jitter),
+   prototypes, epochs, learning-rate schedule.
 
 ## Open questions
 - Exact presentation and paper dates
