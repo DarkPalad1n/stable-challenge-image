@@ -15,5 +15,8 @@ data/*
 *.ckpt
 *.pt
 
+# Training run outputs (checkpoints, logs, scores)
+runs/
+
 # OS
 .DS_Store
