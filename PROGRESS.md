@@ -37,6 +37,9 @@ training budget, seeds and scorer.
 - 2026-11-08: Added an optional feature queue (`--queue-length`,
   `--queue-start-epoch`). Ablation: a queue of 480 lowers the score by 3.6
   points, so it stays off.
+- 2026-11-09: Split `main.py`: it now only reads the settings and runs the
+  epochs; device, seeding, one training epoch and evaluation live in
+  `training.py`. Checked: trained weights are bit-identical to before.
 
 ## Decisions
 | Setting | Value | Why |

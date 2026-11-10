@@ -15,22 +15,18 @@ Training needs no internet, no git and no files besides the Python sources and t
 """
 
 import argparse
-import copy
 import functools
 import json
 import platform
-import random
 import time
 from pathlib import Path
 
-import numpy as np
 import stable_pretraining as spt
 import torch
 
-import evaluate
 import swav
 import swav_data
-from export_onnx import export_onnx
+import training
 from training_data import DEFAULT_PATH
 
 
@@ -66,28 +62,6 @@ def parse_arguments(argv=None):
     return parser.parse_args(argv)
 
 
-def resolve_device(requested):
-    """Return the requested device, or for "auto" the fastest one available."""
-    if requested != "auto":
-        return torch.device(requested)
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
-
-
-def seed_everything(seed):
-    """Seed every random number generator that training draws from.
-
-    On CPU a run is then exactly repeatable. GPU kernels (CUDA, MPS) may still differ
-    in the last digits between runs.
-    """
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-
-
 def run_config(args, device):
     """Everything needed to repeat this run: all settings plus the library versions."""
     settings = {name: str(value) if isinstance(value, Path) else value for name, value in vars(args).items()}
@@ -104,71 +78,16 @@ def save_json(path, content):
     path.write_text(json.dumps(content, indent=2) + "\n")
 
 
-def train_one_epoch(model, loader, optimizer, loss_function, device, freeze_prototypes, queue=None):
-    """Run one pass over the training data and return the mean loss.
-
-    Args:
-        model: The ``swav.SwAVModel`` being trained.
-        loader: Multi-crop loader from ``swav_data.make_train_loader``.
-        optimizer: Optimizer over all model parameters.
-        loss_function: Maps the model's crop scores (and ``queue_scores``) to the scalar
-            SwAV loss.
-        device: Device the model lives on.
-        freeze_prototypes: If true, the prototype gradients are discarded, so the
-            optimizer leaves the prototypes unchanged (AdamW skips parameters without a
-            gradient, weight decay included). The SwAV paper does this in the first epoch.
-        queue: Optional ``swav.FeatureQueue``. Every batch is pushed into it; once full,
-            its scores enter Sinkhorn before the batch is pushed, so it holds earlier
-            batches only.
-    """
-    model.train()
-    total_loss = 0.0
-    for crops in loader:
-        model.normalize_prototypes()
-        crop_projections, crop_scores = model([crop.to(device) for crop in crops])
-        queue_scores = None
-        if queue is not None:
-            if queue.is_full:
-                queue_scores = queue.scores(model.prototypes)
-            queue.push(crop_projections)
-        loss = loss_function(crop_scores, queue_scores=queue_scores)
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        if freeze_prototypes:
-            model.prototypes.weight.grad = None
-        optimizer.step()
-        total_loss += loss.item()
-    return total_loss / len(loader)
+def make_queue(args, device):
+    """The feature queue if ``--queue-length`` asks for one, else None."""
+    if args.queue_length == 0:
+        return None
+    return swav.FeatureQueue(args.queue_length, args.batch_size, swav_data.NUM_GLOBAL_CROPS, device)
 
 
-def export_and_evaluate(model, onnx_path, data_path):
-    """Export the backbone in the submission format and return evaluate.py's probe score.
-
-    The export works on a copy, because ``export_onnx`` moves its model to the CPU and
-    into eval mode. It also draws a random test input, so the CPU random state is saved
-    and restored: an evaluation must not change the rest of the training run.
-    """
-    with torch.random.fork_rng(devices=[]):
-        export_onnx(copy.deepcopy(model.backbone), str(onnx_path))
-    return evaluate.evaluate(str(onnx_path), str(data_path))["score"]
-
-
-def main(argv=None):
-    args = parse_arguments(argv)
-    args.output.mkdir(parents=True, exist_ok=False)
-    device = resolve_device(args.device)
-    seed_everything(args.seed)
-    save_json(args.output / "config.json", run_config(args, device))
-
-    loader = swav_data.make_train_loader(args.data, args.batch_size, args.seed, args.num_workers)
-    if len(loader) == 0:
-        raise ValueError(f"--batch-size {args.batch_size} is larger than the training set")
-    model = swav.SwAVModel(args.prototypes).to(device)
-    queue = None
-    if args.queue_length > 0:
-        queue = swav.FeatureQueue(args.queue_length, args.batch_size, swav_data.NUM_GLOBAL_CROPS, device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
-    loss_function = functools.partial(
+def make_loss_function(args):
+    """The SwAV loss with this run's settings; it takes the crop scores and the queue scores."""
+    return functools.partial(
         swav.swav_loss,
         num_global_crops=swav_data.NUM_GLOBAL_CROPS,
         epsilon=args.epsilon,
@@ -176,16 +95,41 @@ def main(argv=None):
         temperature=args.temperature,
     )
 
+
+def is_evaluation_epoch(epoch, args):
+    """The last epoch is always evaluated, others every ``--eval-every`` epochs if set."""
+    return epoch == args.epochs or (args.eval_every > 0 and epoch % args.eval_every == 0)
+
+
+def main(argv=None):
+    """Train SwAV as set on the command line and write the run's outputs."""
+    args = parse_arguments(argv)
+    args.output.mkdir(parents=True, exist_ok=False)
+    device = training.resolve_device(args.device)
+    training.seed_everything(args.seed)
+    save_json(args.output / "config.json", run_config(args, device))
+
+    loader = swav_data.make_train_loader(args.data, args.batch_size, args.seed, args.num_workers)
+    if len(loader) == 0:
+        raise ValueError(f"--batch-size {args.batch_size} is larger than the training set")
+    model = swav.SwAVModel(args.prototypes).to(device)
+    queue = make_queue(args, device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+    loss_function = make_loss_function(args)
+
     print(f"training on {device}: {args.epochs} epochs of {len(loader)} steps", flush=True)
     history = []
     for epoch in range(1, args.epochs + 1):
         epoch_start = time.time()
-        freeze_prototypes = epoch <= args.freeze_prototypes_epochs
-        epoch_queue = queue if epoch >= args.queue_start_epoch else None
-        mean_loss = train_one_epoch(model, loader, optimizer, loss_function, device, freeze_prototypes, epoch_queue)
+        mean_loss = training.train_one_epoch(
+            model, loader, optimizer, loss_function, device,
+            freeze_prototypes=epoch <= args.freeze_prototypes_epochs,
+            queue=queue if epoch >= args.queue_start_epoch else None,
+        )
         record = {"epoch": epoch, "loss": round(mean_loss, 4), "train_seconds": round(time.time() - epoch_start, 1)}
-        if epoch == args.epochs or (args.eval_every > 0 and epoch % args.eval_every == 0):
-            record["score"] = round(export_and_evaluate(model, args.output / "model.onnx", args.data), 4)
+        if is_evaluation_epoch(epoch, args):
+            score = training.export_and_evaluate(model, args.output / "model.onnx", args.data)
+            record["score"] = round(score, 4)
         history.append(record)
         save_json(args.output / "history.json", history)
         print(json.dumps(record), flush=True)
