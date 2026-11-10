@@ -109,6 +109,17 @@ def few_shot_accuracy(features, labels, domains, shots=SHOTS, episodes=EPISODES,
     return accuracies
 
 
+def available_cpus():
+    """CPUs this process may use: on a cluster node only the job's share, elsewhere all of them.
+
+    ``os.cpu_count()`` counts every CPU of the machine. A Slurm job is limited to its own CPUs, and
+    starting a thread for each of the others would only make the threads compete.
+    """
+    if hasattr(os, "sched_getaffinity"):
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count()
+
+
 def embed_labelled_images(model_path, data_path):
     """Embed every labelled image of ``data_path`` with the ONNX model, as evaluate.py does.
 
@@ -118,7 +129,7 @@ def embed_labelled_images(model_path, data_path):
     images = Dataset.from_parquet(str(data_path))
     images = images.select(np.flatnonzero(np.asarray(images["label"]) != UNLABELLED))
     options = ort.SessionOptions()
-    options.intra_op_num_threads = os.cpu_count()
+    options.intra_op_num_threads = available_cpus()
     session = ort.InferenceSession(str(model_path), options, providers=["CPUExecutionProvider"])
     return embed(session, images), np.asarray(images["label"])
 
