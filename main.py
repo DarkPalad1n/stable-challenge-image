@@ -47,6 +47,13 @@ def parse_arguments(argv=None):
     training.add_argument("--learning-rate", type=float, default=5e-4)
     training.add_argument("--weight-decay", type=float, default=0.05)
 
+    augmentation = parser.add_argument_group("augmentation")
+    augmentation.add_argument("--color-jitter", type=float, nargs=4, default=list(swav_data.DEFAULT_COLOR_JITTER),
+                              metavar=("BRIGHTNESS", "CONTRAST", "SATURATION", "HUE"),
+                              help="colour jitter strength; the SwAV paper uses 0.8 0.8 0.8 0.2")
+    augmentation.add_argument("--blur-probability", type=float, default=0.0,
+                              help="chance that a crop is Gaussian-blurred; the SwAV paper uses 0.5")
+
     swav_settings = parser.add_argument_group("SwAV")
     swav_settings.add_argument("--prototypes", type=int, default=300)
     swav_settings.add_argument("--epsilon", type=float, default=0.05, help="Sinkhorn entropy regularisation")
@@ -109,7 +116,8 @@ def main(argv=None):
     training.seed_everything(args.seed)
     save_json(args.output / "config.json", run_config(args, device))
 
-    loader = swav_data.make_train_loader(args.data, args.batch_size, args.seed, args.num_workers)
+    loader = swav_data.make_train_loader(args.data, args.batch_size, args.seed, args.num_workers,
+                                         args.color_jitter, args.blur_probability)
     if len(loader) == 0:
         raise ValueError(f"--batch-size {args.batch_size} is larger than the training set")
     model = swav.SwAVModel(args.prototypes).to(device)

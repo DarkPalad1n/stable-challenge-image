@@ -80,3 +80,11 @@ def test_retrain_works_with_only_the_python_sources(eval_data, tmp_path):
     result = subprocess.run(command, cwd=bare_dir, capture_output=True, text=True, timeout=600)
     assert result.returncode == 0, result.stderr
     assert (bare_dir / "run" / "model.onnx").is_file()
+
+
+def test_augmentation_settings_reach_the_loader(eval_data, tmp_path):
+    default = train(eval_data, tmp_path / "default", "--epochs", "1")
+    blurred = train(eval_data, tmp_path / "blurred", "--epochs", "1", "--blur-probability", "1")
+    jittered = train(eval_data, tmp_path / "jittered", "--epochs", "1", "--color-jitter", "0.8", "0.8", "0.8", "0.2")
+    assert blurred[0]["loss"] != default[0]["loss"]
+    assert jittered[0]["loss"] != default[0]["loss"]

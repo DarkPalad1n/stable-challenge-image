@@ -1,10 +1,12 @@
-"""Checks for the SwAV multi-crop loader: crop shapes, no labels, and seeded reproducibility."""
+"""Checks for the SwAV multi-crop loader: crop shapes, no labels, seeded reproducibility, augmentations."""
 
 import numpy as np
 import pytest
 import torch
 from conftest import images
 from datasets import Dataset, Features, Image, Value
+from PIL import Image as PILImage
+from stable_pretraining.data import transforms
 
 import swav_data
 
@@ -61,3 +63,47 @@ def test_incomplete_last_batch_is_dropped(labelled_parquet):
     loader = swav_data.make_train_loader(labelled_parquet, batch_size=BATCH_SIZE, seed=0)
     assert len(loader) == NUM_IMAGES // BATCH_SIZE
     assert all(len(crops[0]) == BATCH_SIZE for crops in loader)
+
+
+def augmentation_steps(**settings):
+    """The types of the steps in a global-crop pipeline built with ``settings``."""
+    pipeline = swav_data.crop_augmentation(swav_data.GLOBAL_CROP_SIZE, swav_data.GLOBAL_CROP_AREA, **settings)
+    return pipeline.args
+
+
+def test_blur_is_left_out_unless_enabled():
+    def blur_steps(**settings):
+        return [step for step in augmentation_steps(**settings) if isinstance(step, transforms.PILGaussianBlur)]
+
+    assert blur_steps() == []
+    assert blur_steps(blur_probability=0.0) == []
+    [blur] = blur_steps(blur_probability=0.5)
+    assert blur.p == 0.5 and tuple(blur.sigma) == swav_data.BLUR_RADIUS
+
+
+def test_color_jitter_strength_is_configurable():
+    [jitter] = [step for step in augmentation_steps(color_jitter=(0.8, 0.8, 0.8, 0.2))
+                if isinstance(step, transforms.ColorJitter)]
+    ranges = [jitter.brightness, jitter.contrast, jitter.saturation, jitter.hue]
+    assert ranges == [pytest.approx((0.2, 1.8))] * 3 + [pytest.approx((-0.2, 0.2))]
+
+
+def neighbour_difference(crop):
+    """Mean absolute difference between horizontally adjacent pixels: high for sharp crops."""
+    return (crop[..., 1:] - crop[..., :-1]).abs().mean().item()
+
+
+def test_blur_smooths_the_crop_and_changes_nothing_else():
+    # Blur is the last random step, so with the same seed both pipelines produce the same
+    # crop up to the blur: any difference comes from the blur alone.
+    noise = PILImage.fromarray(np.random.default_rng(0).integers(0, 256, (96, 96, 3), dtype=np.uint8))
+    for seed in range(5):
+        crops = []
+        for blur_probability in (0.0, 1.0):
+            torch.manual_seed(seed)
+            augment = swav_data.crop_augmentation(swav_data.GLOBAL_CROP_SIZE, swav_data.GLOBAL_CROP_AREA,
+                                                  blur_probability=blur_probability)
+            crops.append(augment({"image": noise})["image"])
+        sharp, blurred = crops
+        assert neighbour_difference(blurred) < neighbour_difference(sharp)
+        torch.testing.assert_close(blurred.mean(), sharp.mean(), atol=0.05, rtol=0)
