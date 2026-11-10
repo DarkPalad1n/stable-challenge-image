@@ -22,7 +22,8 @@ training budget, seeds and scorer.
   from random weights (`spt.backbone.Resnet9` loads nothing).
 - Use labels for monitoring only, never in the training objective.
 - The final `main.py` must run offline from the data alone.
-- Change one setting at a time and use at least 3 seeds per setting.
+- Change one setting at a time. From 2026-11-10: 6 seeds (0-5) per setting
+  (3 before; those results stay as recorded).
 
 ## Done
 - 2026-11-06: Forked the repo and set up the environment with `uv sync`.
@@ -45,6 +46,8 @@ training budget, seeds and scorer.
 - 2026-11-09: Made colour jitter and blur configurable (`--color-jitter`,
   `--blur-probability`). Ablation: the paper's augmentation lowers the score
   by 6.1 points, so the defaults stay.
+- 2026-11-10: Added `challenge_score.py`, a local stand-in for the leaderboard
+  score (per-domain probes plus 10-shot episodes), and scored all runs with it.
 
 ## Decisions
 | Setting | Value | Why |
@@ -106,7 +109,31 @@ together, so we cannot say which one hurts. Not tested: why. One guess is that
 colour carries much of the class information in the galaxy and satellite
 images, and strong saturation and hue jitter removes it.
 
+## Challenge-style score
+`challenge_score.py` mirrors the scoring of the pre-release evaluator
+(`galilai-group/stable-challenge-image-test`, `evaluate.py`): mean of an
+in-domain part (ridge probe per domain, here leave-one-out) and a few-shot part
+(10 images per class, here 20 fixed episodes per domain), each averaged over the
+three domains. The domain of each class was read off the labelled images.
+Unlike the leaderboard, all classes were seen in training, so the few-shot part
+is not a test on new classes. Means over seeds 0-2, final epoch:
+
+| Run | Score | In-domain | Few-shot | EuroSAT id / fs | Galaxy10 id / fs | Imagenette id / fs |
+|---|---:|---:|---:|---|---|---|
+| Untrained (floor) | 0.393 | 0.427 | 0.358 | 0.491 / 0.464 | 0.410 / 0.327 | 0.381 / 0.283 |
+| SwAV baseline | 0.481 | 0.535 | 0.427 | 0.700 / 0.663 | 0.406 / 0.253 | 0.499 / 0.365 |
+| Queue 480 | 0.457 | 0.512 | 0.402 | 0.683 / 0.657 | 0.425 / 0.243 | 0.427 / 0.307 |
+| Paper augmentation | 0.455 | 0.506 | 0.404 | 0.661 / 0.632 | 0.402 / 0.258 | 0.454 / 0.323 |
+
+The ranking of the three runs is the same as with `evaluate.py`.
+
 ## Observations
+- SwAV helps two domains and hurts the third. Over the floor, the baseline
+  gains about 20 points on EuroSAT and 8-12 on Imagenette, but on Galaxy10 the
+  in-domain part stays flat and the few-shot part drops by 7 points (0.327 to
+  0.253, lower for each of the 3 seeds). Not tested: why. Guesses: most of a
+  galaxy image is black sky, so small crops often show sky only; and all
+  galaxies look alike at a glance, so they may share a few prototypes.
 - Only 29 of the 30 classes appear among the labelled images.
 - Three untrained models span 2.7 points, so small gaps need several seeds.
 - The score jumps 2 to 6 points between neighbouring epochs, so the spread
@@ -122,9 +149,10 @@ images, and strong saturation and hue jitter removes it.
   augmentation makes the task harder and the loss higher.
 
 ## Next
-1. Learning-rate schedule (warmup plus cosine, as in the paper), 3 seeds
-   against the baseline.
-2. If time remains: blur alone and stronger jitter alone, prototypes, epochs.
+1. Rerun the baseline on Hydra with 6 seeds, scored with both scorers; add
+   floor scores for seeds 3-5.
+2. Find out why Galaxy10 gets worse, since it is a third of the score.
+3. Learning-rate schedule, larger batches, more epochs: 6 seeds each.
 
 ## Open questions
 - Exact presentation and paper dates
