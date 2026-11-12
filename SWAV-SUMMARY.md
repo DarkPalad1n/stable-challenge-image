@@ -159,12 +159,17 @@ so the leaderboard will likely land nearer the configuration mean.
    up to GPU rounding on the cluster), and `challenge_score.py` can score the whole curve.
 5. **Galaxy10** is still the weakest domain and a third of the score.
 6. **Group:** agree on the final model and on who uploads, since only the latest upload counts.
-7. **Reproducibility:** the Hydra job scripts (6-seed array job, summary scripts) live only on the
-   cluster so far.
+7. **Reproducibility:** the Hydra job scripts are in `cluster/` since 2026-11-12 (see section 7). The
+   runs in this file were started with an earlier copy of the training script, which differed in its
+   default GPU and time limit only.
 
 ## 7. Practical notes on Hydra
 
-- Job array with one GPU per seed: `--array=0-5`, 4 CPUs, 16 GB RAM.
+- `sbatch cluster/train_seeds.sh NAME [main.py options]` trains seeds 0-5 as a job array with one GPU
+  per seed (4 CPUs, 16 GB RAM, `--num-workers 4`, an evaluation every 5 epochs) and writes
+  `runs/hydra-NAME-sSEED/`. `sbatch cluster/score_models.sh NAME` then scores the six models in one CPU
+  job, and `uv run cluster/summarize.py` prints mean, standard deviation, minimum and maximum per
+  configuration (`--curve NAME`: per evaluated epoch).
 - RTX 2080 Ti (11 GB) runs batch 32. Batch 128 ran out of memory there and needs a Titan RTX (24 GB)
   or larger; batch 256 ran on an L40S.
 - 200-epoch runs used a 16-hour limit. They took 2.7-4.7 hours, but one `e200` seed ran at 110 s
