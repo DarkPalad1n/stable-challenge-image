@@ -1,0 +1,20 @@
+[
+  {
+    "date": "2026-11-11",
+    "name": "b128-e100-s2",
+    "sha256": "33ae0fd7a8f1505985ee57fe0ee19769d628543ddc13468ffb03f7f4d53b704b",
+    "challenge_score": 0.6234,
+    "main_score": 0.6467,
+    "leaderboard_score": null,
+    "note": "replaced by the next upload before the leaderboard scored it"
+  },
+  {
+    "date": "2026-11-12",
+    "name": "b128-e200-s4",
+    "sha256": "7cd4f248f4d88274f0706c87fbaeb52a778880f3933ae2d4088a85c92ba36669",
+    "challenge_score": 0.6983,
+    "main_score": 0.68,
+    "leaderboard_score": null,
+    "note": ""
+  }
+]
