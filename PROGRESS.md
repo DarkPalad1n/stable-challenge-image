@@ -1,7 +1,11 @@
 # SwAV progress log
 
 Pascal's SwAV track for the image challenge.
-Update this file after every experiment.
+
+This file is the detailed log of the laptop phase (2026-11-06 to 2026-11-10) and is kept as
+it was written then. Everything later, including all Hydra results, the current defaults of
+`main.py` and the open points, is in `SWAV-SUMMARY.md`. The sections "Decisions", "Next" and
+"Open questions" below describe the state on 2026-11-10.
 
 ## Goal
 Train a ResNet9 encoder with SwAV on `data/train.parquet` and export it to ONNX
@@ -48,6 +52,15 @@ training budget, seeds and scorer.
   by 6.1 points, so the defaults stay.
 - 2026-11-10: Added `challenge_score.py`, a local stand-in for the leaderboard
   score (per-domain probes plus 10-shot episodes), and scored all runs with it.
+- 2026-11-10 to 2026-11-12: Hydra phase, 12 configurations with 6 seeds each. Best:
+  batch 128 for 200 epochs, challenge score 0.683 +/- 0.009 (floor 0.386). See
+  `SWAV-SUMMARY.md` for all tables.
+- 2026-11-12: `main.py` defaults are now that configuration (batch 128, 200 epochs).
+  Added `--keep-evaluated-models`, an optional warm-up and cosine schedule
+  (`--warmup-epochs`, `--lr-schedule`), the cluster scripts in `cluster/`,
+  `swav_diagnostics.py` (target entropy, prototype usage per domain) and
+  `proxy_validation.py` with `uploads.json` (upload record, correlation with the
+  leaderboard). The evaluation during training uses only the job's CPUs.
 
 ## Decisions
 | Setting | Value | Why |

@@ -2,7 +2,7 @@
 
 Pascal's SwAV track for the image challenge. This file collects everything done so far in one
 place: setup, how we measure, every ablation, and the leaderboard uploads. `PROGRESS.md` holds the
-detailed log of the laptop phase (up to 2026-11-10); the Hydra results below are not in it yet.
+detailed log of the laptop phase (up to 2026-11-10); for everything later, this file is the record.
 
 ## Short version
 
@@ -131,9 +131,23 @@ Notes on interpretation:
   over the 300 prototypes, so with 32 images per batch the targets are very soft (laptop phase:
   assignment entropy 4.2-4.4 nats, maximum 5.70). The SwAV paper warns about small batches.
 
+### Diagnostics (`swav_diagnostics.py`)
+
+The script loads a run's `checkpoint.pt` and reports the entropy of the Sinkhorn targets and how the
+training images spread over the prototypes, overall and per domain (labels are used for this split
+only). It is meant for the two open questions: why batch 128 helps and why Galaxy10 is weak. It has
+not run on the Hydra checkpoints yet. One laptop run so far (baseline, batch 32, 30 epochs, seed 0),
+so an observation and not a result:
+
+- The 250 labelled Galaxy10 images share 4 of the 300 prototypes; EuroSAT uses 61 and Imagenette 57.
+  All 7,500 images use 168 prototypes, about 39 effectively.
+- The target entropy is 3.93 nats (maximum 5.70). With the same model and batches of 128 it is 3.85.
+
 ## 5. Leaderboard uploads
 
-Only the latest upload counts. All uploads so far come from one participant ID.
+Only the latest upload counts. All uploads so far come from one participant ID. `uploads.json` holds
+one record per upload (file hash, both local scores, the leaderboard score once published);
+`proxy_validation.py` writes it and prints the correlation of the local scores with the leaderboard.
 
 | Date | Model | Local challenge score (seed / configuration mean) | Leaderboard score |
 |---|---|---|---|
@@ -143,10 +157,28 @@ Only the latest upload counts. All uploads so far come from one participant ID.
 Both files passed `test_submission.py` (13.3 MiB). The chosen seed is the best of six by local score,
 so the leaderboard will likely land nearer the configuration mean.
 
+Plan to validate the local score (the "upload ladder"): one model per leaderboard refresh, spanning
+the whole range of local scores, each recorded with `proxy_validation.py add` before the upload and
+`proxy_validation.py leaderboard` after the refresh. The 2026-11-11 upload was replaced before it was
+scored, so every rung has to wait for its score.
+
+| Rung | Model | Local challenge score (configuration mean) |
+|---|---|---:|
+| 1 | Untrained ResNet9 (floor) | 0.386 |
+| 2 | `baseline-e30` | 0.497 |
+| 3 | `e100` | 0.548 |
+| 4 | `b128-e100` | 0.612 |
+| 5 | `b128-e200` (uploaded 2026-11-12, waiting for its score) | 0.683 |
+
+The best model must be uploaded again last, because only the latest upload counts. With five points
+a correlation is rough evidence; the per-seed spread (about 1 point) is small against the 30-point
+range of the ladder.
+
 ## 6. Open points and next steps
 
-1. **Leaderboard check:** when it refreshes, compare the official score with the local 0.683-0.698.
-   This tells us how well `challenge_score.py` predicts the leaderboard.
+1. **Leaderboard check:** when it refreshes, record the official score of the 2026-11-12 upload and
+   continue with the upload ladder of section 5. Not done: running the pre-release `evaluate.py` on
+   our models as a second local proxy.
 2. **Retrain budget:** Randall retrains `main.py` offline. `b128-e200` takes 2.7-4.7 hours per seed on
    a Titan RTX. We need the retrain time and hardware limit before training even longer.
 3. **`main.py` defaults:** they describe `b128-e200` since 2026-11-12 and must follow the best
@@ -156,12 +188,19 @@ so the leaderboard will likely land nearer the configuration mean.
 4. **Longer training:** the score still rises from 100 to 200 epochs. The next test is one 800-epoch
    run per seed at batch 128 with `--keep-evaluated-models --eval-every 50`: the learning rate is
    constant, so the kept model of epoch N is the model a run of N epochs would give (exactly on CPU,
-   up to GPU rounding on the cluster), and `challenge_score.py` can score the whole curve.
-5. **Galaxy10** is still the weakest domain and a third of the score.
+   up to GPU rounding on the cluster), and `challenge_score.py` can score the whole curve. This run
+   (`b128-e800`) was started on 2026-11-12. After it: the warm-up plus cosine schedule
+   (`--lr-schedule cosine --warmup-epochs 10`) against the constant rate, at the length the curve
+   suggests.
+5. **Galaxy10** is still the weakest domain and a third of the score. Next: `swav_diagnostics.py` on
+   the six `e200` and the six `b128-e200` checkpoints, each at batch 32 and at batch 128. A
+   step-matched control for the batch comparison is also open: batch 32 for 800 epochs makes as many
+   optimiser steps as batch 128 for 3,200 epochs, and batch 32 for 200 epochs as many as batch 128
+   for 800, which the `b128-e800` curve will give.
 6. **Group:** agree on the final model and on who uploads, since only the latest upload counts.
 7. **Reproducibility:** the Hydra job scripts are in `cluster/` since 2026-11-12 (see section 7). The
-   runs in this file were started with an earlier copy of the training script, which differed in its
-   default GPU and time limit only.
+   runs in this file were started with an earlier copy of the training script, whose defaults were
+   an RTX 2080 Ti and 4 hours.
 
 ## 7. Practical notes on Hydra
 
