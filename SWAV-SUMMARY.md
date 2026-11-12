@@ -28,8 +28,21 @@ detailed log of the laptop phase (up to 2026-11-10); the Hydra results below are
 | Augmentation | Colour jitter 0.4, 0.4, 0.2, 0.1 (p = 0.8), grayscale; no blur, no solarize |
 | SwAV | Sinkhorn epsilon 0.05, 3 iterations, temperature 0.1; prototypes frozen in epoch 1; targets from the global crops only |
 | Optimiser | AdamW, learning rate 5e-4, weight decay 0.05, constant (no schedule) |
-| Defaults in `main.py` | Batch 32, 10 epochs, seed 0 |
+| Defaults in `main.py` | The best configuration: batch 128, 200 epochs, seed 0; data loading in the main process |
 | Data | `data/train.parquet` only, labels never in the loss, no pretrained weights |
+
+`main.py` without options trains the configuration we hand in (`b128-e200` below). It needs a GPU with
+more than 11 GB of memory; with 4 loader workers it took 2.7-4.7 hours per seed on a Titan RTX. Until
+2026-11-12 the defaults were batch 32 and 10 epochs. Every result in this file is repeated by passing
+its changed settings explicitly; the 30-epoch baseline on Hydra, for example, is
+`--batch-size 32 --epochs 30 --num-workers 4`.
+
+Loader workers: all Hydra runs used `--num-workers 4`, the laptop runs and the default use 0 (the main
+process). The default must run in an unknown retrain environment: on macOS a worker process can abort
+when it exits (onnxruntime's telemetry thread, loaded through kornia), which ends the run; this hit
+runs with very short epochs. Each worker draws its own augmentations, so a run with the defaults draws
+other augmentations than the measured Hydra runs. It is the same recipe, but not the same run, and it
+loads the data more slowly.
 
 ## 2. How we measure
 
@@ -136,8 +149,10 @@ so the leaderboard will likely land nearer the configuration mean.
    This tells us how well `challenge_score.py` predicts the leaderboard.
 2. **Retrain budget:** Randall retrains `main.py` offline. `b128-e200` takes 2.7-4.7 hours per seed on
    a Titan RTX. We need the retrain time and hardware limit before training even longer.
-3. **`main.py` defaults:** they still describe the old baseline (batch 32, 10 epochs). Before the code
-   hand-in they must match the configuration we submit.
+3. **`main.py` defaults:** they describe `b128-e200` since 2026-11-12 and must follow the best
+   configuration if it changes before the code hand-in. Still to do: confirm the recipe exactly as
+   handed in (defaults, so no loader workers) once with seeds 0-5 on Hydra; `b128-e200` was measured
+   with 4 workers.
 4. **Longer training:** the score still rises from 100 to 200 epochs, so 300-400 epochs at batch 128
    are the obvious next test, if the retrain budget allows it.
 5. **Galaxy10** is still the weakest domain and a third of the score.

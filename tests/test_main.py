@@ -22,6 +22,19 @@ def train(data_path, output_dir, *extra_arguments):
     return json.loads((output_dir / "history.json").read_text())
 
 
+def test_defaults_are_the_configuration_we_hand_in():
+    # The offline retrain runs main.py without options, so these values are the submitted recipe.
+    settings = vars(main.parse_arguments(["--output", "run"]))
+    expected = {
+        "seed": 0, "num_workers": 0,
+        "epochs": 200, "batch_size": 128, "learning_rate": 5e-4, "weight_decay": 0.05,
+        "color_jitter": [0.4, 0.4, 0.2, 0.1], "blur_probability": 0.0,
+        "prototypes": 300, "epsilon": 0.05, "sinkhorn_iterations": 3, "temperature": 0.1,
+        "freeze_prototypes_epochs": 1, "queue_length": 0,
+    }
+    assert {name: settings[name] for name in expected} == expected
+
+
 def test_run_writes_every_output(eval_data, tmp_path):
     run_dir = tmp_path / "run"
     history = train(eval_data, run_dir, "--epochs", "2", "--eval-every", "1")

@@ -1,6 +1,12 @@
 """Train a ResNet9 encoder with SwAV on train.parquet and export it for the challenge.
 
-    uv run main.py --data data/train.parquet --output runs/swav-s0 [--epochs 10] [--seed 0] ...
+    uv run main.py --data data/train.parquet --output runs/swav-s0 [--seed 0] ...
+
+Without further options this trains the configuration we hand in: batch 128 for 200 epochs.
+On a Titan RTX (24 GB) one such run took 2.7 to 4.7 hours. Batch 128 needs more than 11 GB
+of GPU memory; it ran out of memory on an RTX 2080 Ti. Those runs loaded the data with
+--num-workers 4. The default is 0, which runs everywhere but is slower and draws other
+augmentations, so a run with the defaults is the same recipe but not the same run.
 
 Writes into --output, which must not exist yet:
 
@@ -32,19 +38,22 @@ from training_data import DEFAULT_PATH
 
 
 def parse_arguments(argv=None):
-    """Read the command line; the defaults are the current baseline configuration."""
+    """Read the command line; the defaults are the configuration we hand in."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--data", default=DEFAULT_PATH, help="path to train.parquet")
     parser.add_argument("--output", type=Path, required=True, help="new directory for this run's outputs")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default="auto", help="auto, cpu, mps or cuda")
-    parser.add_argument("--num-workers", type=int, default=0, help="data loading processes; 0 = main process")
+    parser.add_argument("--num-workers", type=int, default=0,
+                        help="data loading processes; 0 = main process, which runs everywhere. Each worker "
+                             "draws its own augmentations, so another number trains another run; our "
+                             "cluster runs used 4")
     parser.add_argument("--eval-every", type=int, default=0,
                         help="also evaluate every N epochs; 0 = only after the last epoch")
 
     training = parser.add_argument_group("training")
-    training.add_argument("--epochs", type=int, default=10)
-    training.add_argument("--batch-size", type=int, default=32)
+    training.add_argument("--epochs", type=int, default=200)
+    training.add_argument("--batch-size", type=int, default=128)
     training.add_argument("--learning-rate", type=float, default=5e-4)
     training.add_argument("--weight-decay", type=float, default=0.05)
 
