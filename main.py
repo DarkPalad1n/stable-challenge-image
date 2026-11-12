@@ -9,7 +9,8 @@ Writes into --output, which must not exist yet:
     model.onnx      the trained backbone in the submission format
     checkpoint.pt   weights of the full SwAV model (backbone, projector and prototypes)
 
-The probe score is evaluate.py's leave-one-out accuracy on the labelled training images.
+The probe score is evaluate.py's leave-one-out accuracy on the labelled training images,
+computed by ``training.probe_score`` with only the CPUs this process may use.
 Labels are used there only, for monitoring; the training objective never sees them.
 Training needs no internet, no git and no files besides the Python sources and the data.
 """

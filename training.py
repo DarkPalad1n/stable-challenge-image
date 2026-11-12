@@ -4,10 +4,13 @@
 """
 
 import copy
+import os
 import random
 
 import numpy as np
+import onnxruntime as ort
 import torch
+from datasets import Dataset
 
 import evaluate
 from export_onnx import export_onnx
@@ -72,8 +75,42 @@ def train_one_epoch(model, loader, optimizer, loss_function, device, freeze_prot
     return total_loss / len(loader)
 
 
+def available_cpus():
+    """CPUs this process may use: on a cluster node only the job's share, elsewhere all of them.
+
+    ``os.cpu_count()`` counts every CPU of the machine. A Slurm job is limited to its own
+    CPUs, and starting a thread for each of the others would only make the threads compete.
+    """
+    if hasattr(os, "sched_getaffinity"):
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count()
+
+
+def embed_labelled_images(model_path, data_path):
+    """Embed every labelled image of ``data_path`` with the ONNX model, as evaluate.py does.
+
+    ``evaluate.evaluate`` starts one onnxruntime thread per CPU of the machine. This
+    function differs from it in the thread count only: it uses ``available_cpus()``.
+
+    Returns:
+        Features [num_labelled, dim] and labels [num_labelled].
+    """
+    images = Dataset.from_parquet(str(data_path))
+    images = images.select(np.flatnonzero(np.asarray(images["label"]) != evaluate.UNLABELLED))
+    options = ort.SessionOptions()
+    options.intra_op_num_threads = available_cpus()
+    session = ort.InferenceSession(str(model_path), options, providers=["CPUExecutionProvider"])
+    return evaluate.embed(session, images), np.asarray(images["label"])
+
+
+def probe_score(model_path, data_path):
+    """evaluate.py's score: leave-one-out accuracy of its ridge probe on the labelled images."""
+    features, labels = embed_labelled_images(model_path, data_path)
+    return float((evaluate.Ridge().fit(features, labels).loo_pred == labels).mean())
+
+
 def export_and_evaluate(model, onnx_path, data_path):
-    """Export the backbone in the submission format and return evaluate.py's probe score.
+    """Export the backbone in the submission format and return its probe score.
 
     The export works on a copy, because ``export_onnx`` moves its model to the CPU and
     into eval mode. It also draws a random test input, so the CPU random state is saved
@@ -81,4 +118,4 @@ def export_and_evaluate(model, onnx_path, data_path):
     """
     with torch.random.fork_rng(devices=[]):
         export_onnx(copy.deepcopy(model.backbone), str(onnx_path))
-    return evaluate.evaluate(str(onnx_path), str(data_path))["score"]
+    return probe_score(onnx_path, data_path)

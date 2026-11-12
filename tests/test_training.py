@@ -1,7 +1,10 @@
-"""Checks for one training epoch: prototype freezing and the feature queue."""
+"""Checks for one training epoch (prototype freezing, feature queue) and for the probe score."""
 
 import pytest
 import torch
+from conftest import MODEL
+
+import evaluate
 
 import swav
 import swav_data
@@ -49,3 +52,34 @@ def test_queue_holds_only_earlier_batches_newest_first(eval_data):
         for crop_index in range(swav_data.NUM_GLOBAL_CROPS):
             expected = torch.cat([steps[step - 1][0][crop_index], steps[step - 2][0][crop_index]])
             torch.testing.assert_close(queue_scores[crop_index], expected)
+
+
+def test_probe_score_is_the_score_of_evaluate_py(eval_data):
+    assert training.probe_score(MODEL, eval_data) == evaluate.evaluate(str(MODEL), str(eval_data))["score"]
+
+
+def test_probe_score_does_not_depend_on_the_thread_count(eval_data, monkeypatch):
+    all_cpus = training.probe_score(MODEL, eval_data)
+    monkeypatch.setattr(training, "available_cpus", lambda: 1)
+    assert training.probe_score(MODEL, eval_data) == all_cpus
+
+
+def test_thread_count_follows_the_cpus_the_job_may_use(monkeypatch):
+    monkeypatch.setattr(training.os, "sched_getaffinity", lambda pid: {0, 1, 2, 3}, raising=False)
+    assert training.available_cpus() == 4
+    monkeypatch.delattr(training.os, "sched_getaffinity", raising=False)
+    assert training.available_cpus() == training.os.cpu_count()
+
+
+def test_embedding_session_uses_the_available_cpus(eval_data, monkeypatch):
+    thread_counts = []
+    original_session = training.ort.InferenceSession
+
+    def recording_session(model_path, options, **arguments):
+        thread_counts.append(options.intra_op_num_threads)
+        return original_session(model_path, options, **arguments)
+
+    monkeypatch.setattr(training, "available_cpus", lambda: 3)
+    monkeypatch.setattr(training.ort, "InferenceSession", recording_session)
+    training.embed_labelled_images(MODEL, eval_data)
+    assert thread_counts == [3]

@@ -154,8 +154,9 @@ so the leaderboard will likely land nearer the configuration mean.
   per epoch on one node instead of about 38 s and was restarted on another node.
 - `challenge_score.py` must use only the CPUs the job may use (fixed in `b684337`). Scoring all six
   models in one CPU job takes a few minutes.
-- `evaluate.py` (upstream) still starts one thread per node CPU, which slows the evaluations during
-  training.
+- `evaluate.py` (upstream) starts one thread per node CPU. The evaluations during training therefore
+  use `training.probe_score`, which computes the same score with only the job's CPUs. Runs before this
+  change called `evaluate.py` directly, which slowed their evaluations.
 
 ## Appendix: challenge score per seed
 

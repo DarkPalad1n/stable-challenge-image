@@ -66,9 +66,3 @@ def test_score_of_a_real_model_is_the_mean_of_both_parts(eval_data):
     assert result["score"] == (result["in_domain"] + result["few_shot"]) / 2
     assert 0 <= result["few_shot"] <= 1 and 0 <= result["in_domain"] <= 1
 
-
-def test_thread_count_follows_the_cpus_the_job_may_use(monkeypatch):
-    monkeypatch.setattr(challenge_score.os, "sched_getaffinity", lambda pid: {0, 1, 2, 3}, raising=False)
-    assert challenge_score.available_cpus() == 4
-    monkeypatch.delattr(challenge_score.os, "sched_getaffinity", raising=False)
-    assert challenge_score.available_cpus() == challenge_score.os.cpu_count()

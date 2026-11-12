@@ -23,13 +23,11 @@ Labels are read here only, for evaluation; training never sees them.
 
 import argparse
 import json
-import os
 
 import numpy as np
-import onnxruntime as ort
-from datasets import Dataset
 
-from evaluate import UNLABELLED, Ridge, embed
+from evaluate import Ridge
+from training import embed_labelled_images
 
 IMAGENETTE, GALAXY10, EUROSAT = "imagenette", "galaxy10", "eurosat"
 # train.parquet does not say which domain a class comes from. This map was read off the labelled images
@@ -107,31 +105,6 @@ def few_shot_accuracy(features, labels, domains, shots=SHOTS, episodes=EPISODES,
             episode_accuracies.append((probe.predict(domain_features[query]) == domain_labels[query]).mean())
         accuracies[domain] = float(np.mean(episode_accuracies))
     return accuracies
-
-
-def available_cpus():
-    """CPUs this process may use: on a cluster node only the job's share, elsewhere all of them.
-
-    ``os.cpu_count()`` counts every CPU of the machine. A Slurm job is limited to its own CPUs, and
-    starting a thread for each of the others would only make the threads compete.
-    """
-    if hasattr(os, "sched_getaffinity"):
-        return len(os.sched_getaffinity(0))
-    return os.cpu_count()
-
-
-def embed_labelled_images(model_path, data_path):
-    """Embed every labelled image of ``data_path`` with the ONNX model, as evaluate.py does.
-
-    Returns:
-        Features [num_labelled, dim] and labels [num_labelled].
-    """
-    images = Dataset.from_parquet(str(data_path))
-    images = images.select(np.flatnonzero(np.asarray(images["label"]) != UNLABELLED))
-    options = ort.SessionOptions()
-    options.intra_op_num_threads = available_cpus()
-    session = ort.InferenceSession(str(model_path), options, providers=["CPUExecutionProvider"])
-    return embed(session, images), np.asarray(images["label"])
 
 
 def challenge_score(model_path, data_path, domain_of_class=DOMAIN_OF_CLASS):
