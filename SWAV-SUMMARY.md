@@ -27,7 +27,7 @@ detailed log of the laptop phase (up to 2026-11-10); the Hydra results below are
 | Crops | 2 global (96 px, scale 0.14-1) + 4 local (48 px, scale 0.05-0.14) |
 | Augmentation | Colour jitter 0.4, 0.4, 0.2, 0.1 (p = 0.8), grayscale; no blur, no solarize |
 | SwAV | Sinkhorn epsilon 0.05, 3 iterations, temperature 0.1; prototypes frozen in epoch 1; targets from the global crops only |
-| Optimiser | AdamW, learning rate 5e-4, weight decay 0.05, constant (no schedule) |
+| Optimiser | AdamW, learning rate 5e-4, weight decay 0.05, constant (no schedule). Optional, not yet compared: `--warmup-epochs` and `--lr-schedule cosine` |
 | Defaults in `main.py` | The best configuration: batch 128, 200 epochs, seed 0; data loading in the main process |
 | Data | `data/train.parquet` only, labels never in the loss, no pretrained weights |
 

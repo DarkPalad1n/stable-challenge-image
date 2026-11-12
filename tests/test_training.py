@@ -1,4 +1,4 @@
-"""Checks for one training epoch (prototype freezing, feature queue) and for the probe score."""
+"""Checks for one training epoch (prototype freezing, feature queue, learning rate) and the probe score."""
 
 import pytest
 import torch
@@ -83,3 +83,38 @@ def test_embedding_session_uses_the_available_cpus(eval_data, monkeypatch):
     monkeypatch.setattr(training.ort, "InferenceSession", recording_session)
     training.embed_labelled_images(MODEL, eval_data)
     assert thread_counts == [3]
+
+
+def test_constant_schedule_without_warmup_never_changes_the_learning_rate():
+    assert {training.learning_rate_factor(step, "constant", 0, 100) for step in range(100)} == {1.0}
+
+
+def test_warmup_rises_linearly_to_the_full_learning_rate():
+    factors = [training.learning_rate_factor(step, "constant", 4, 100) for step in range(6)]
+    assert factors == [0.25, 0.5, 0.75, 1.0, 1.0, 1.0]
+
+
+def test_cosine_schedule_falls_from_the_full_learning_rate_towards_zero():
+    factors = [training.learning_rate_factor(step, "cosine", 10, 110) for step in range(10, 110)]
+    assert factors[0] == 1.0
+    assert factors[50] == pytest.approx(0.5)
+    assert 0 < factors[-1] < 0.001
+    assert all(later < earlier for earlier, later in zip(factors, factors[1:]))
+
+
+def test_training_steps_use_the_scheduled_learning_rate(eval_data):
+    torch.manual_seed(0)
+    model = swav.SwAVModel(num_prototypes=10)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-2, weight_decay=0.05)
+    loader = swav_data.make_train_loader(str(eval_data), batch_size=8, seed=0)
+    scheduler = training.make_scheduler(optimizer, "cosine", warmup_steps=2, total_steps=len(loader))
+    learning_rates = []
+
+    def recording_loss(crop_scores, queue_scores):
+        learning_rates.append(optimizer.param_groups[0]["lr"])
+        return swav.swav_loss(crop_scores, swav_data.NUM_GLOBAL_CROPS, 0.05, 3, 0.1, queue_scores)
+
+    training.train_one_epoch(model, loader, optimizer, recording_loss, torch.device("cpu"), False, scheduler=scheduler)
+    expected = [1e-2 * training.learning_rate_factor(step, "cosine", 2, 5) for step in range(5)]
+    assert learning_rates == pytest.approx(expected)
+    assert learning_rates[0] == pytest.approx(5e-3) and learning_rates[1] == pytest.approx(1e-2)

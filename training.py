@@ -4,6 +4,7 @@
 """
 
 import copy
+import math
 import os
 import random
 
@@ -38,7 +39,38 @@ def seed_everything(seed):
     torch.manual_seed(seed)
 
 
-def train_one_epoch(model, loader, optimizer, loss_function, device, freeze_prototypes, queue=None):
+def learning_rate_factor(step, schedule, warmup_steps, total_steps):
+    """The factor that scales the base learning rate at one optimiser step.
+
+    During the warm-up the factor rises linearly and reaches 1 at the last warm-up step.
+    After it, "constant" keeps 1 and "cosine" falls along half a cosine wave towards 0,
+    which the step after the last one would reach. The SwAV paper combines a warm-up with
+    the cosine decay; it ends at a small positive rate instead of 0.
+
+    Args:
+        step: Index of the optimiser step, counted from 0 over the whole run.
+        schedule: "constant" or "cosine".
+        warmup_steps: Number of warm-up steps at the start of the run; 0 = no warm-up.
+        total_steps: Number of optimiser steps of the whole run.
+    """
+    if step < warmup_steps:
+        return (step + 1) / warmup_steps
+    if schedule == "constant":
+        return 1.0
+    progress = (step - warmup_steps) / (total_steps - warmup_steps)
+    return 0.5 * (1 + math.cos(math.pi * progress))
+
+
+def make_scheduler(optimizer, schedule, warmup_steps, total_steps):
+    """A scheduler that sets the learning rate of every step with ``learning_rate_factor``.
+
+    Call its ``step()`` once after each optimiser step, as ``train_one_epoch`` does.
+    """
+    return torch.optim.lr_scheduler.LambdaLR(
+        optimizer, lambda step: learning_rate_factor(step, schedule, warmup_steps, total_steps))
+
+
+def train_one_epoch(model, loader, optimizer, loss_function, device, freeze_prototypes, queue=None, scheduler=None):
     """Run one pass over the training data and return the mean loss.
 
     Args:
@@ -54,6 +86,8 @@ def train_one_epoch(model, loader, optimizer, loss_function, device, freeze_prot
         queue: Optional ``swav.FeatureQueue``. Every batch is pushed into it; once full,
             its scores enter Sinkhorn before the batch is pushed, so it holds earlier
             batches only.
+        scheduler: Optional learning-rate scheduler from ``make_scheduler``, advanced
+            after every optimiser step. Without one the learning rate stays as it is.
     """
     model.train()
     total_loss = 0.0
@@ -71,6 +105,8 @@ def train_one_epoch(model, loader, optimizer, loss_function, device, freeze_prot
         if freeze_prototypes:
             model.prototypes.weight.grad = None
         optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
         total_loss += loss.item()
     return total_loss / len(loader)
 

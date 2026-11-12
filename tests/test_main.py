@@ -28,6 +28,7 @@ def test_defaults_are_the_configuration_we_hand_in():
     expected = {
         "seed": 0, "num_workers": 0,
         "epochs": 200, "batch_size": 128, "learning_rate": 5e-4, "weight_decay": 0.05,
+        "lr_schedule": "constant", "warmup_epochs": 0,
         "color_jitter": [0.4, 0.4, 0.2, 0.1], "blur_probability": 0.0,
         "prototypes": 300, "epsilon": 0.05, "sinkhorn_iterations": 3, "temperature": 0.1,
         "freeze_prototypes_epochs": 1, "queue_length": 0,
@@ -97,6 +98,22 @@ def test_queue_changes_training_from_its_start_epoch_only(eval_data, tmp_path):
 def test_queue_length_is_checked_before_training(eval_data, tmp_path):
     with pytest.raises(ValueError, match="multiple of the batch size"):
         train(eval_data, tmp_path / "run", "--epochs", "1", "--queue-length", "12")
+
+
+def test_schedule_settings_change_training_as_documented(eval_data, tmp_path):
+    # 5 steps per epoch. The cosine decay starts after the first step, a warm-up changes the first step.
+    constant = train(eval_data, tmp_path / "constant", "--epochs", "2")
+    cosine = train(eval_data, tmp_path / "cosine", "--epochs", "2", "--lr-schedule", "cosine")
+    warmed_up = train(eval_data, tmp_path / "warmup", "--epochs", "2", "--warmup-epochs", "1")
+    assert cosine[0]["loss"] != constant[0]["loss"]
+    assert warmed_up[0]["loss"] != constant[0]["loss"]
+    config = json.loads((tmp_path / "cosine" / "config.json").read_text())
+    assert config["settings"]["lr_schedule"] == "cosine" and config["settings"]["warmup_epochs"] == 0
+
+
+def test_warmup_must_be_shorter_than_the_run(eval_data, tmp_path):
+    with pytest.raises(ValueError, match="--warmup-epochs"):
+        train(eval_data, tmp_path / "run", "--epochs", "2", "--warmup-epochs", "2")
 
 
 def test_retrain_works_with_only_the_python_sources(eval_data, tmp_path):

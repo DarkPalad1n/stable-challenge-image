@@ -53,14 +53,20 @@ def parse_arguments(argv=None):
     parser.add_argument("--eval-every", type=int, default=0,
                         help="also evaluate every N epochs; 0 = only after the last epoch")
     parser.add_argument("--keep-evaluated-models", action="store_true",
-                        help="keep the model of every evaluated epoch as model-epochNNNN.onnx. The learning "
-                             "rate is constant, so epoch N of a long run is a run of N epochs")
+                        help="keep the model of every evaluated epoch as model-epochNNNN.onnx. With the "
+                             "constant learning rate, epoch N of a long run is a run of N epochs")
 
     training = parser.add_argument_group("training")
     training.add_argument("--epochs", type=int, default=200)
     training.add_argument("--batch-size", type=int, default=128)
     training.add_argument("--learning-rate", type=float, default=5e-4)
     training.add_argument("--weight-decay", type=float, default=0.05)
+    training.add_argument("--lr-schedule", choices=["constant", "cosine"], default="constant",
+                          help="learning rate after the warm-up: constant, or cosine decay towards 0 at the "
+                               "end of the run (as in the SwAV paper), which ties the run to its --epochs")
+    training.add_argument("--warmup-epochs", type=int, default=0,
+                          help="initial epochs in which the learning rate rises linearly to --learning-rate; "
+                               "the SwAV paper uses 10")
 
     augmentation = parser.add_argument_group("augmentation")
     augmentation.add_argument("--color-jitter", type=float, nargs=4, default=list(swav_data.DEFAULT_COLOR_JITTER),
@@ -143,6 +149,10 @@ def main(argv=None):
     model = swav.SwAVModel(args.prototypes).to(device)
     queue = make_queue(args, device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+    if not 0 <= args.warmup_epochs < args.epochs:
+        raise ValueError(f"--warmup-epochs {args.warmup_epochs} must be at least 0 and below --epochs {args.epochs}")
+    scheduler = training.make_scheduler(optimizer, args.lr_schedule, args.warmup_epochs * len(loader),
+                                        args.epochs * len(loader))
     loss_function = make_loss_function(args)
 
     print(f"training on {device}: {args.epochs} epochs of {len(loader)} steps", flush=True)
@@ -153,6 +163,7 @@ def main(argv=None):
             model, loader, optimizer, loss_function, device,
             freeze_prototypes=epoch <= args.freeze_prototypes_epochs,
             queue=queue if epoch >= args.queue_start_epoch else None,
+            scheduler=scheduler,
         )
         record = {"epoch": epoch, "loss": round(mean_loss, 4), "train_seconds": round(time.time() - epoch_start, 1)}
         if is_evaluation_epoch(epoch, args):
