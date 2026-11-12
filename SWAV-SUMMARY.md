@@ -153,8 +153,10 @@ so the leaderboard will likely land nearer the configuration mean.
    configuration if it changes before the code hand-in. Still to do: confirm the recipe exactly as
    handed in (defaults, so no loader workers) once with seeds 0-5 on Hydra; `b128-e200` was measured
    with 4 workers.
-4. **Longer training:** the score still rises from 100 to 200 epochs, so 300-400 epochs at batch 128
-   are the obvious next test, if the retrain budget allows it.
+4. **Longer training:** the score still rises from 100 to 200 epochs. The next test is one 800-epoch
+   run per seed at batch 128 with `--keep-evaluated-models --eval-every 50`: the learning rate is
+   constant, so the kept model of epoch N is the model a run of N epochs would give (exactly on CPU,
+   up to GPU rounding on the cluster), and `challenge_score.py` can score the whole curve.
 5. **Galaxy10** is still the weakest domain and a third of the score.
 6. **Group:** agree on the final model and on who uploads, since only the latest upload counts.
 7. **Reproducibility:** the Hydra job scripts (6-seed array job, summary scripts) live only on the

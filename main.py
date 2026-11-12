@@ -13,6 +13,7 @@ Writes into --output, which must not exist yet:
     config.json     every setting of the run plus the library versions
     history.json    per epoch: mean training loss and, on evaluation epochs, the probe score
     model.onnx      the trained backbone in the submission format
+    model-epochNNNN.onnx   with --keep-evaluated-models: the backbone after every evaluated epoch
     checkpoint.pt   weights of the full SwAV model (backbone, projector and prototypes)
 
 The probe score is evaluate.py's leave-one-out accuracy on the labelled training images,
@@ -25,6 +26,7 @@ import argparse
 import functools
 import json
 import platform
+import shutil
 import time
 from pathlib import Path
 
@@ -50,6 +52,9 @@ def parse_arguments(argv=None):
                              "cluster runs used 4")
     parser.add_argument("--eval-every", type=int, default=0,
                         help="also evaluate every N epochs; 0 = only after the last epoch")
+    parser.add_argument("--keep-evaluated-models", action="store_true",
+                        help="keep the model of every evaluated epoch as model-epochNNNN.onnx. The learning "
+                             "rate is constant, so epoch N of a long run is a run of N epochs")
 
     training = parser.add_argument_group("training")
     training.add_argument("--epochs", type=int, default=200)
@@ -118,6 +123,11 @@ def is_evaluation_epoch(epoch, args):
     return epoch == args.epochs or (args.eval_every > 0 and epoch % args.eval_every == 0)
 
 
+def evaluated_model_path(output_dir, epoch):
+    """Where ``--keep-evaluated-models`` stores the model of ``epoch``; zero-padded so the files sort."""
+    return output_dir / f"model-epoch{epoch:04d}.onnx"
+
+
 def main(argv=None):
     """Train SwAV as set on the command line and write the run's outputs."""
     args = parse_arguments(argv)
@@ -148,6 +158,8 @@ def main(argv=None):
         if is_evaluation_epoch(epoch, args):
             score = training.export_and_evaluate(model, args.output / "model.onnx", args.data)
             record["score"] = round(score, 4)
+            if args.keep_evaluated_models:
+                shutil.copyfile(args.output / "model.onnx", evaluated_model_path(args.output, epoch))
         history.append(record)
         save_json(args.output / "history.json", history)
         print(json.dumps(record), flush=True)

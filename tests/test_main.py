@@ -50,6 +50,23 @@ def test_last_epoch_is_always_evaluated(eval_data, tmp_path):
     assert "score" not in history[0] and "score" in history[1]
 
 
+def test_evaluated_models_are_kept_on_request(eval_data, tmp_path):
+    run_dir = tmp_path / "run"
+    train(eval_data, run_dir, "--epochs", "3", "--eval-every", "2", "--keep-evaluated-models")
+    kept = sorted(path.name for path in run_dir.glob("model-epoch*.onnx"))
+    assert kept == ["model-epoch0002.onnx", "model-epoch0003.onnx"]
+    assert (run_dir / "model-epoch0003.onnx").read_bytes() == (run_dir / "model.onnx").read_bytes()
+    assert (run_dir / "model-epoch0002.onnx").read_bytes() != (run_dir / "model.onnx").read_bytes()
+    assert json.loads((run_dir / "config.json").read_text())["settings"]["keep_evaluated_models"] is True
+
+
+def test_kept_model_of_an_epoch_is_the_model_of_a_run_that_ends_there(eval_data, tmp_path):
+    # This is why one long run gives the whole training curve.
+    train(eval_data, tmp_path / "long", "--epochs", "2", "--eval-every", "1", "--keep-evaluated-models")
+    train(eval_data, tmp_path / "short", "--epochs", "1")
+    assert (tmp_path / "long" / "model-epoch0001.onnx").read_bytes() == (tmp_path / "short" / "model.onnx").read_bytes()
+
+
 def test_existing_run_is_never_overwritten(eval_data, tmp_path):
     (tmp_path / "run").mkdir()
     with pytest.raises(FileExistsError):
