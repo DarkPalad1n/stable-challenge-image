@@ -14,6 +14,15 @@
     "sha256": "7cd4f248f4d88274f0706c87fbaeb52a778880f3933ae2d4088a85c92ba36669",
     "challenge_score": 0.6983,
     "main_score": 0.68,
+    "leaderboard_score": 0.5747,
+    "note": ""
+  },
+  {
+    "date": "2026-11-13",
+    "name": "b128-e800-s5",
+    "sha256": "0c6912d20988fc3d62cc8a0f60db0bdaee8a3e5139fdc8e52b29a6d3b488677b",
+    "challenge_score": 0.761,
+    "main_score": 0.744,
     "leaderboard_score": null,
     "note": ""
   }
