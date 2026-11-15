@@ -32,7 +32,7 @@
     "sha256": "55f4be72e5df70bb237cda5e4449cc28902fb7e9bbb8dce8dde167b7a49d4e2c",
     "challenge_score": 0.5921,
     "main_score": 0.616,
-    "leaderboard_score": null,
+    "leaderboard_score": 0.552,
     "note": "epoch-100 checkpoint of b128-e800-s5, third point for the correlation"
   }
 ]
