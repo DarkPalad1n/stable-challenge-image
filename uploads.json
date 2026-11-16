@@ -34,5 +34,14 @@
     "main_score": 0.616,
     "leaderboard_score": 0.552,
     "note": "epoch-100 checkpoint of b128-e800-s5, third point for the correlation"
+  },
+  {
+    "date": "2026-11-16",
+    "name": "b128-e1600-s0",
+    "sha256": "51d2de7b7c6ec2657701eae4407e3e76d3ad7554ef2611ed39e163a1f3a73f3e",
+    "challenge_score": 0.7656,
+    "main_score": 0.768,
+    "leaderboard_score": null,
+    "note": "hand-in candidate (1600 epochs, seed 0 by rule, not picked by score)"
   }
 ]
