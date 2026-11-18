@@ -1,4 +1,4 @@
-"""Train a ResNet9 encoder with SwAV on train.parquet and export it for the challenge.
+"""Train an image encoder (ResNet9 by default) with SwAV on train.parquet and export it for the challenge.
 
     uv run main.py --data data/train.parquet --output runs/swav-s0 [--seed 0] ...
 
@@ -80,6 +80,10 @@ def parse_arguments(argv=None):
                                    f"{swav_data.LOCAL_CROP_SIZE} px; the SwAV paper uses 0.05 0.14")
 
     swav_settings = parser.add_argument_group("SwAV")
+    swav_settings.add_argument("--backbone", choices=swav.BACKBONES, default="resnet9",
+                               help="encoder to train from random weights: resnet9 (3.49M parameters, 1024 "
+                                    "features) or resnet18-narrow (4.37M parameters, 320 features, zero-padded "
+                                    "to 1024 on export)")
     swav_settings.add_argument("--prototypes", type=int, default=300)
     swav_settings.add_argument("--epsilon", type=float, default=0.05, help="Sinkhorn entropy regularisation")
     swav_settings.add_argument("--sinkhorn-iterations", type=int, default=3)
@@ -153,7 +157,7 @@ def main(argv=None):
                                          args.color_jitter, args.blur_probability, args.local_crop_area)
     if len(loader) == 0:
         raise ValueError(f"--batch-size {args.batch_size} is larger than the training set")
-    model = swav.SwAVModel(args.prototypes).to(device)
+    model = swav.SwAVModel(args.prototypes, args.backbone).to(device)
     queue = make_queue(args, device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     if not 0 <= args.warmup_epochs < args.epochs:

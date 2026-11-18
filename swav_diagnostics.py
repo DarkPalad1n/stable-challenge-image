@@ -48,7 +48,7 @@ def load_run(run_dir, device):
     """
     run_dir = Path(run_dir)
     settings = json.loads((run_dir / "config.json").read_text())["settings"]
-    model = swav.SwAVModel(settings["prototypes"])
+    model = swav.SwAVModel(settings["prototypes"], settings.get("backbone", "resnet9"))
     model.load_state_dict(torch.load(run_dir / "checkpoint.pt", map_location="cpu"))
     return model.to(device).eval(), settings
 

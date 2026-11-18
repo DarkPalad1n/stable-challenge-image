@@ -1,10 +1,13 @@
 """Checks for the SwAV core: Sinkhorn assignments, model outputs, the feature queue and the loss."""
 
+import os
+
 import pytest
 import torch
 import torch.nn.functional as F
 
 import swav
+from export_onnx import export_onnx
 
 BATCH_SIZE, NUM_PROTOTYPES = 8, 5
 NUM_GLOBAL_CROPS, NUM_LOCAL_CROPS = 2, 4
@@ -87,8 +90,9 @@ def test_model_returns_projections_and_cosine_scores_for_every_crop():
     assert all(scores.abs().max() <= 1 + 1e-5 for scores in crop_scores)
 
 
-def test_backbone_sees_global_crops_last():
-    model = swav.SwAVModel(NUM_PROTOTYPES)
+@pytest.mark.parametrize("backbone", swav.BACKBONES)
+def test_backbone_sees_global_crops_last(backbone):
+    model = swav.SwAVModel(NUM_PROTOTYPES, backbone)
     resolutions_seen = []
     model.backbone.register_forward_hook(lambda module, inputs, output: resolutions_seen.append(inputs[0].shape[-1]))
     model(random_crops())
@@ -103,11 +107,50 @@ def test_prototypes_have_unit_length_after_normalisation():
     torch.testing.assert_close(model.prototypes.weight.norm(dim=1), torch.ones(NUM_PROTOTYPES))
 
 
-def test_backbone_fits_the_submission_format():
-    backbone = swav.SwAVModel(NUM_PROTOTYPES).backbone.eval()
-    float32_size_bytes = 4 * sum(parameter.numel() for parameter in backbone.parameters())
+def test_default_backbone_is_the_resnet9():
+    model = swav.SwAVModel(NUM_PROTOTYPES)
+    assert type(model.backbone).__name__ == "Resnet9"
+    assert model.backbone(torch.randn(2, 3, 96, 96)).shape == (2, swav.EMBEDDING_DIM)
+
+
+@pytest.mark.parametrize("backbone", swav.BACKBONES)
+def test_backbone_fits_the_submission_format(backbone, tmp_path):
+    encoder = swav.SwAVModel(NUM_PROTOTYPES, backbone).backbone.eval()
+    float32_size_bytes = 4 * sum(parameter.numel() for parameter in encoder.parameters())
     assert float32_size_bytes < SUBMISSION_SIZE_CAP_BYTES
-    assert backbone(torch.randn(2, 3, 96, 96)).shape == (2, swav.EMBEDDING_DIM)
+    assert encoder(torch.randn(2, 3, 96, 96)).shape[1] <= swav.EMBEDDING_DIM
+    onnx_path = export_onnx(encoder, str(tmp_path / "model.onnx"))  # pads to EMBEDDING_DIM and checks the file
+    assert os.path.getsize(onnx_path) < SUBMISSION_SIZE_CAP_BYTES
+
+
+def test_narrow_resnet18_has_the_documented_size_and_output():
+    backbone, output_dim = swav.make_backbone("resnet18-narrow")
+    assert sum(parameter.numel() for parameter in backbone.parameters()) == 4_365_480
+    assert output_dim == swav.NARROW_RESNET18_WIDTHS[-1]
+    assert backbone.eval()(torch.randn(2, 3, 96, 96)).shape == (2, output_dim)
+
+
+@pytest.mark.parametrize("backbone", swav.BACKBONES)
+def test_backbone_batchnorm_follows_the_last_pass(backbone):
+    # embed_crops relies on this: the exported running statistics must come from the 96-pixel pass.
+    encoder, _ = swav.make_backbone(backbone)
+    batchnorms = [module for module in encoder.modules() if isinstance(module, torch.nn.BatchNorm2d)]
+    assert batchnorms and all(module.momentum == swav.BATCHNORM_MOMENTUM for module in batchnorms)
+
+
+def test_same_seed_gives_the_same_starting_weights():
+    def starting_weights(seed):
+        torch.manual_seed(seed)
+        return swav.make_backbone("resnet18-narrow")[0].state_dict()
+
+    first, again, other = starting_weights(0), starting_weights(0), starting_weights(1)
+    assert all(torch.equal(first[name], again[name]) for name in first)
+    assert not all(torch.equal(first[name], other[name]) for name in first)
+
+
+def test_unknown_backbone_is_rejected():
+    with pytest.raises(ValueError, match="unknown backbone"):
+        swav.make_backbone("resnet50")
 
 
 def test_loss_takes_targets_from_global_crops_only(monkeypatch):

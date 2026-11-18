@@ -30,7 +30,7 @@ detailed log of the laptop phase (up to 2026-11-10); for everything later, this 
 
 | Setting | Value |
 |---|---|
-| Encoder | ResNet9 (`stable_pretraining.backbone.Resnet9`), 1024-dim output, 3.49M parameters, 13.3 MiB ONNX (cap 20 MiB) |
+| Encoder | ResNet9 (`stable_pretraining.backbone.Resnet9`), 1024-dim output, 3.49M parameters, 13.3 MiB ONNX (cap 20 MiB). Option `--backbone resnet18-narrow` (branch `resnet18`): ResNet18 layout with stages of 40-80-160-320 channels, 3x3 stem, 320-dim output zero-padded to 1024, 4.37M parameters, 16.6 MiB ONNX; untested so far |
 | Head | Projector 1024-1024-128, then prototypes (default 300) |
 | Crops | 2 global (96 px, scale 0.14-1) + 4 local (48 px, scale 0.05-0.14; set with `--local-crop-area`) |
 | Augmentation | Colour jitter 0.4, 0.4, 0.2, 0.1 (p = 0.8), grayscale; no blur, no solarize |
