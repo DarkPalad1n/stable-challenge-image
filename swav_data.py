@@ -31,7 +31,7 @@ from training_data import load_training_data
 GLOBAL_CROP_SIZE = 96  # pixels, the full image resolution
 LOCAL_CROP_SIZE = 48  # pixels, half resolution
 GLOBAL_CROP_AREA = (0.14, 1.0)  # (min, max) fraction of the image area, from the SwAV paper
-LOCAL_CROP_AREA = (0.05, 0.14)
+LOCAL_CROP_AREA = (0.05, 0.14)  # default; set with main.py --local-crop-area
 NUM_GLOBAL_CROPS = 2
 NUM_LOCAL_CROPS = 4
 DEFAULT_COLOR_JITTER = (0.4, 0.4, 0.2, 0.1)  # brightness, contrast, saturation, hue
@@ -70,15 +70,17 @@ def crop_augmentation(crop_size, crop_area, color_jitter=DEFAULT_COLOR_JITTER, b
     return transforms.Compose(*steps)
 
 
-def multicrop_augmentations(color_jitter=DEFAULT_COLOR_JITTER, blur_probability=0.0):
+def multicrop_augmentations(color_jitter=DEFAULT_COLOR_JITTER, blur_probability=0.0, local_crop_area=LOCAL_CROP_AREA):
     """Return one augmentation per crop, global crops first, then local crops.
 
     Args:
         color_jitter: See ``crop_augmentation``.
         blur_probability: See ``crop_augmentation``.
+        local_crop_area: (min, max) fraction of the image area a local crop covers. Only the
+            visible part of the image changes; local crops stay ``LOCAL_CROP_SIZE`` pixels.
     """
     global_crop = crop_augmentation(GLOBAL_CROP_SIZE, GLOBAL_CROP_AREA, color_jitter, blur_probability)
-    local_crop = crop_augmentation(LOCAL_CROP_SIZE, LOCAL_CROP_AREA, color_jitter, blur_probability)
+    local_crop = crop_augmentation(LOCAL_CROP_SIZE, tuple(local_crop_area), color_jitter, blur_probability)
     return [global_crop] * NUM_GLOBAL_CROPS + [local_crop] * NUM_LOCAL_CROPS
 
 
@@ -106,7 +108,7 @@ class UnlabelledImages(torch.utils.data.Dataset):
 
 
 def make_train_loader(parquet_path, batch_size, seed, num_workers=0, color_jitter=DEFAULT_COLOR_JITTER,
-                      blur_probability=0.0):
+                      blur_probability=0.0, local_crop_area=LOCAL_CROP_AREA):
     """Build the shuffled multi-crop loader for SwAV training.
 
     Reproducibility: ``seed`` fixes the order of the images and, with ``num_workers > 0``,
@@ -121,6 +123,7 @@ def make_train_loader(parquet_path, batch_size, seed, num_workers=0, color_jitte
         num_workers: Worker processes for loading; 0 loads in the main process.
         color_jitter: See ``crop_augmentation``.
         blur_probability: See ``crop_augmentation``.
+        local_crop_area: See ``multicrop_augmentations``.
 
     Returns:
         A DataLoader whose batches are lists of ``NUM_GLOBAL_CROPS + NUM_LOCAL_CROPS``
@@ -129,7 +132,7 @@ def make_train_loader(parquet_path, batch_size, seed, num_workers=0, color_jitte
         has the same size and Sinkhorn always balances the same number of samples.
     """
     return torch.utils.data.DataLoader(
-        UnlabelledImages(parquet_path, multicrop_augmentations(color_jitter, blur_probability)),
+        UnlabelledImages(parquet_path, multicrop_augmentations(color_jitter, blur_probability, local_crop_area)),
         batch_size=batch_size,
         shuffle=True,
         drop_last=True,

@@ -88,6 +88,29 @@ def test_color_jitter_strength_is_configurable():
     assert ranges == [pytest.approx((0.2, 1.8))] * 3 + [pytest.approx((-0.2, 0.2))]
 
 
+def crop_areas(pipelines):
+    """The (min, max) area of the random crop step in each pipeline."""
+    return [tuple(step.scale) for pipeline in pipelines for step in pipeline.args
+            if isinstance(step, transforms.RandomResizedCrop)]
+
+
+def test_local_crop_area_is_configurable_and_leaves_the_global_crops_alone():
+    default = crop_areas(swav_data.multicrop_augmentations())
+    larger = crop_areas(swav_data.multicrop_augmentations(local_crop_area=(0.14, 0.4)))
+    num_global = swav_data.NUM_GLOBAL_CROPS
+    assert default == [swav_data.GLOBAL_CROP_AREA] * num_global + [swav_data.LOCAL_CROP_AREA] * swav_data.NUM_LOCAL_CROPS
+    assert larger == [swav_data.GLOBAL_CROP_AREA] * num_global + [(0.14, 0.4)] * swav_data.NUM_LOCAL_CROPS
+
+
+def test_larger_local_crops_keep_their_size(labelled_parquet):
+    torch.manual_seed(0)
+    loader = swav_data.make_train_loader(labelled_parquet, batch_size=BATCH_SIZE, seed=0, local_crop_area=(0.14, 0.4))
+    crops = next(iter(loader))
+    local_shape = (BATCH_SIZE, 3, swav_data.LOCAL_CROP_SIZE, swav_data.LOCAL_CROP_SIZE)
+    assert [tuple(crop_batch.shape) for crop_batch in crops[swav_data.NUM_GLOBAL_CROPS:]] == \
+        [local_shape] * swav_data.NUM_LOCAL_CROPS
+
+
 def neighbour_difference(crop):
     """Mean absolute difference between horizontally adjacent pixels: high for sharp crops."""
     return (crop[..., 1:] - crop[..., :-1]).abs().mean().item()

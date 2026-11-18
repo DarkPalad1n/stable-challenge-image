@@ -29,7 +29,7 @@ def test_defaults_are_the_configuration_we_hand_in():
         "seed": 0, "num_workers": 0,
         "epochs": 200, "batch_size": 128, "learning_rate": 5e-4, "weight_decay": 0.05,
         "lr_schedule": "constant", "warmup_epochs": 0,
-        "color_jitter": [0.4, 0.4, 0.2, 0.1], "blur_probability": 0.0,
+        "color_jitter": [0.4, 0.4, 0.2, 0.1], "blur_probability": 0.0, "local_crop_area": [0.05, 0.14],
         "prototypes": 300, "epsilon": 0.05, "sinkhorn_iterations": 3, "temperature": 0.1,
         "freeze_prototypes_epochs": 1, "queue_length": 0,
     }
@@ -133,5 +133,14 @@ def test_augmentation_settings_reach_the_loader(eval_data, tmp_path):
     default = train(eval_data, tmp_path / "default", "--epochs", "1")
     blurred = train(eval_data, tmp_path / "blurred", "--epochs", "1", "--blur-probability", "1")
     jittered = train(eval_data, tmp_path / "jittered", "--epochs", "1", "--color-jitter", "0.8", "0.8", "0.8", "0.2")
+    larger_local_crops = train(eval_data, tmp_path / "larger", "--epochs", "1", "--local-crop-area", "0.14", "0.4")
     assert blurred[0]["loss"] != default[0]["loss"]
     assert jittered[0]["loss"] != default[0]["loss"]
+    assert larger_local_crops[0]["loss"] != default[0]["loss"]
+
+
+@pytest.mark.parametrize("area", [("0", "0.14"), ("0.4", "0.14"), ("0.14", "1.5")])
+def test_local_crop_area_is_checked_before_anything_is_written(eval_data, tmp_path, area):
+    with pytest.raises(ValueError, match="--local-crop-area"):
+        train(eval_data, tmp_path / "run", "--local-crop-area", *area)
+    assert not (tmp_path / "run").exists()
