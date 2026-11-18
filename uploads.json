@@ -1,0 +1,47 @@
+[
+  {
+    "date": "2026-11-11",
+    "name": "b128-e100-s2",
+    "sha256": "33ae0fd7a8f1505985ee57fe0ee19769d628543ddc13468ffb03f7f4d53b704b",
+    "challenge_score": 0.6234,
+    "main_score": 0.6467,
+    "leaderboard_score": null,
+    "note": "replaced by the next upload before the leaderboard scored it"
+  },
+  {
+    "date": "2026-11-12",
+    "name": "b128-e200-s4",
+    "sha256": "7cd4f248f4d88274f0706c87fbaeb52a778880f3933ae2d4088a85c92ba36669",
+    "challenge_score": 0.6983,
+    "main_score": 0.68,
+    "leaderboard_score": 0.5747,
+    "note": ""
+  },
+  {
+    "date": "2026-11-13",
+    "name": "b128-e800-s5",
+    "sha256": "0c6912d20988fc3d62cc8a0f60db0bdaee8a3e5139fdc8e52b29a6d3b488677b",
+    "challenge_score": 0.761,
+    "main_score": 0.744,
+    "leaderboard_score": 0.6157,
+    "note": ""
+  },
+  {
+    "date": "2026-11-14",
+    "name": "b128-e800-s5-ep100",
+    "sha256": "55f4be72e5df70bb237cda5e4449cc28902fb7e9bbb8dce8dde167b7a49d4e2c",
+    "challenge_score": 0.5921,
+    "main_score": 0.616,
+    "leaderboard_score": 0.552,
+    "note": "epoch-100 checkpoint of b128-e800-s5, third point for the correlation"
+  },
+  {
+    "date": "2026-11-16",
+    "name": "b128-e1600-s0",
+    "sha256": "51d2de7b7c6ec2657701eae4407e3e76d3ad7554ef2611ed39e163a1f3a73f3e",
+    "challenge_score": 0.7656,
+    "main_score": 0.768,
+    "leaderboard_score": 0.6233,
+    "note": "hand-in candidate (1600 epochs, seed 0 by rule, not picked by score)"
+  }
+]
