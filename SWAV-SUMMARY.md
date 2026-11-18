@@ -1,4 +1,4 @@
-# SwAV track: summary of all experiments (as of 2026-11-12)
+# SwAV track: summary of all experiments (as of 2026-11-18)
 
 Pascal's SwAV track for the image challenge. This file collects everything done so far in one
 place: setup, how we measure, every ablation, and the leaderboard uploads. `PROGRESS.md` holds the
@@ -6,36 +6,42 @@ detailed log of the laptop phase (up to 2026-11-10); for everything later, this 
 
 ## Short version
 
-- **Best configuration: batch 128, 200 epochs**, all other settings at their defaults. Local
-  challenge score 0.683 +/- 0.009 over seeds 0-5 (untrained encoder: 0.386 +/- 0.011; paired gain
-  +29.8 +/- 1.7 points).
-- **Uploaded** on 2026-11-12: seed 4 of that configuration (local score 0.698). The leaderboard has
-  not refreshed yet, so there is no official score.
-- **What helps:** longer training and batch 128, and the two add up. From 30 to 200 epochs at batch
-  128 the score rises by 17 points.
+- **Best measured configuration: batch 128, constant learning rate, 800 epochs.** Local challenge
+  score 0.751 +/- 0.007 over seeds 0-5 (untrained encoder: 0.386 +/- 0.011). 1600 epochs give
+  0.759 +/- 0.010, a gain of +0.8 points that is not significant (about 1.6 SE), so 800 epochs is the
+  working default from 2026-11-16 on.
+- **Plateau:** every long run ends at about 0.75-0.76: 800 or 1600 epochs, Sinkhorn epsilon 0.05 or
+  0.03. A cosine schedule ends lower (0.737). Training seems exhausted for this encoder; the next test
+  is a larger encoder (section 6).
+- **Sinkhorn epsilon:** sharper targets learn faster. At 200 epochs epsilon 0.01-0.03 beats the
+  paper's 0.05 by about 3 points (about 7 SE); at 800 epochs the difference is gone (+0.3). Epsilon
+  0.1 collapses (0.270, below the untrained encoder), as the SwAV paper warns.
+- **Leaderboard:** four scored uploads. The local scores rank them in the same order as the
+  leaderboard (Spearman 1.0; Pearson 0.96 for the challenge score, 0.99 for the `main.py` score), but
+  the leaderboard compresses differences: one local point is worth about 0.4-0.5 leaderboard points.
+  The latest upload (1600 epochs, seed 0) scores 0.6233; we predicted 0.61-0.63 before the refresh.
 - **What hurts:** stronger colour jitter (-2.3), blur (-1.4), learning rate 1e-3 instead of 5e-4
-  (-2.2), a feature queue (-3.6, laptop phase).
+  (-2.2), a feature queue (-3.6, laptop phase), cosine decay instead of a constant rate (-1.4).
 - **No measurable effect:** 100 or 1000 prototypes instead of 300; batch 256 at 30 epochs.
-- **Weakest domain:** Galaxy10 (0.52 in-domain, 0.43 few-shot, against 0.73-0.85 for the others).
+- **Weakest domain:** Galaxy10 (0.52 in-domain, 0.43 few-shot at `b128-e200`, against 0.73-0.85 for
+  the others).
 
 ## 1. Setup
 
 | Setting | Value |
 |---|---|
-| Encoder | ResNet9, 1024-dim output, 3.49M parameters, 13.3 MiB ONNX (cap 20 MiB) |
+| Encoder | ResNet9 (`stable_pretraining.backbone.Resnet9`), 1024-dim output, 3.49M parameters, 13.3 MiB ONNX (cap 20 MiB) |
 | Head | Projector 1024-1024-128, then prototypes (default 300) |
 | Crops | 2 global (96 px, scale 0.14-1) + 4 local (48 px, scale 0.05-0.14) |
 | Augmentation | Colour jitter 0.4, 0.4, 0.2, 0.1 (p = 0.8), grayscale; no blur, no solarize |
-| SwAV | Sinkhorn epsilon 0.05, 3 iterations, temperature 0.1; prototypes frozen in epoch 1; targets from the global crops only |
-| Optimiser | AdamW, learning rate 5e-4, weight decay 0.05, constant (no schedule). Optional, not yet compared: `--warmup-epochs` and `--lr-schedule cosine` |
-| Defaults in `main.py` | The best configuration: batch 128, 200 epochs, seed 0; data loading in the main process |
+| SwAV | Sinkhorn epsilon 0.05, 3 iterations (log space), temperature 0.1; prototypes frozen in epoch 1; targets from the global crops only |
+| Optimiser | AdamW, learning rate 5e-4, weight decay 0.05, constant. Optional: `--warmup-epochs` and `--lr-schedule cosine` (tested, worse) |
+| Defaults in `main.py` | Batch 128, 200 epochs, seed 0; data loading in the main process. To be raised to 800 epochs (section 6) |
 | Data | `data/train.parquet` only, labels never in the loss, no pretrained weights |
 
-`main.py` without options trains the configuration we hand in (`b128-e200` below). It needs a GPU with
-more than 11 GB of memory; with 4 loader workers it took 2.7-4.7 hours per seed on a Titan RTX. Until
-2026-11-12 the defaults were batch 32 and 10 epochs. Every result in this file is repeated by passing
-its changed settings explicitly; the 30-epoch baseline on Hydra, for example, is
-`--batch-size 32 --epochs 30 --num-workers 4`.
+`main.py` without options trains batch 128 for 200 epochs. It needs a GPU with more than 11 GB of
+memory. Every result in this file is repeated by passing its changed settings explicitly; the
+30-epoch baseline on Hydra, for example, is `--batch-size 32 --epochs 30 --num-workers 4`.
 
 Loader workers: all Hydra runs used `--num-workers 4`, the laptop runs and the default use 0 (the main
 process). The default must run in an unknown retrain environment: on macOS a worker process can abort
@@ -48,14 +54,20 @@ loads the data more slowly.
 
 - **Challenge score** (`challenge_score.py`, main measure): mirrors the pre-release evaluator. Mean of
   an in-domain part (ridge probe per domain, leave-one-out) and a few-shot part (10 images per class,
-  20 fixed episodes), each averaged over EuroSAT, Galaxy10 and Imagenette. All classes were seen in
-  training, so the few-shot part is not a test on new classes as on the leaderboard.
+  20 fixed episodes), each averaged over EuroSAT, Galaxy10 and Imagenette. All images, including those
+  of the few-shot classes, were seen (without labels) in training, so the few-shot part is not a test
+  on new classes as on the leaderboard.
 - **`main.py` score** (`evaluate.py`): one leave-one-out ridge probe over all 750 labelled images.
-  Reported for completeness. It ranks some runs differently because it does not average per domain.
+  It ranks some runs differently because it does not average per domain.
 - **Seeds:** every configuration is trained with seeds 0-5 (laptop phase: 0-2).
 - **Comparisons:** difference of means with standard error SE = sqrt(s1²/6 + s2²/6). We call a
   difference real when it is at least about 2 SE. A single run varies by about +/-1 point.
-- **Last epoch only:** we never pick the best epoch, since that would use labels for model selection.
+- **Last epoch only:** we never pick the best epoch or the best seed by score, since that would use
+  labels for model selection. Uploads from 2026-11-16 on use seed 0 by rule.
+- **Training curves:** with a constant learning rate, the kept model of epoch N of a long run
+  (`--keep-evaluated-models`) stands for a run of N epochs. The `b128-e800` curve confirms this at
+  epoch 200: 0.684, against 0.683 for the separate 200-epoch runs. This does not hold for the cosine
+  schedule, whose rate depends on the planned length.
 
 ## 3. Phase 1: laptop (MacBook, MPS), 2026-11-06 to 2026-11-10
 
@@ -71,18 +83,17 @@ Three seeds each, batch 32, 30 epochs unless noted. Scores are `main.py` scores 
 The laptop and Hydra runs are not bit-identical (different hardware), so we compare only within
 one phase.
 
-## 4. Phase 2: Brown Hydra cluster, 2026-11-10 to 2026-11-12
+## 4. Phase 2: Brown Hydra cluster, from 2026-11-10
 
-One configuration per job array, seeds 0-5 in parallel, one GPU per seed. All runs use the same
-training code (commits `757c0cd` and `b684337` differ only in `challenge_score.py`'s thread count).
-Scoring ran afterwards in one CPU job. Batch 128 does not fit on an RTX 2080 Ti (11 GB) and ran on
-Titan RTX (24 GB).
+One configuration per job array, seeds 0-5 in parallel, one GPU per seed. Scoring ran afterwards in
+one CPU job. Batch 128 does not fit on an RTX 2080 Ti (11 GB); it ran on Titan RTX (24 GB), L40,
+L40S and RTX A6000 (48 GB). The seeds of one configuration sometimes ran on different GPU types.
 
-### All configurations (means over seeds 0-5)
+### 4.1 First wave, 2026-11-10 to 2026-11-12 (means over seeds 0-5)
 
 | Configuration | Changed setting | Challenge score | In-domain | Few-shot | EuroSAT id / fs | Galaxy10 id / fs | Imagenette id / fs | `main.py` score | GPU |
 |---|---|---:|---:|---:|---|---|---|---:|---|
-| `b128-e200` | batch 128, 200 epochs | **0.683 +/- 0.009** | 0.703 | 0.664 | 0.850 / 0.820 | 0.524 / 0.435 | 0.734 / 0.738 | not read | Titan RTX |
+| `b128-e200` | batch 128, 200 epochs | **0.683 +/- 0.009** | 0.703 | 0.664 | 0.850 / 0.820 | 0.524 / 0.435 | 0.734 / 0.738 | 0.684 | Titan RTX |
 | `b128-e100` | batch 128, 100 epochs | 0.612 +/- 0.009 | 0.647 | 0.577 | 0.823 / 0.782 | 0.495 / 0.357 | 0.624 / 0.591 | 0.625 | Titan RTX |
 | `e200` | 200 epochs | 0.592 +/- 0.011 | 0.619 | 0.564 | 0.806 / 0.765 | 0.415 / 0.326 | 0.636 / 0.602 | 0.625 | RTX 2080 Ti |
 | `e100` | 100 epochs | 0.548 +/- 0.012 | 0.593 | 0.502 | 0.778 / 0.727 | 0.435 / 0.291 | 0.566 / 0.489 | 0.594 | RTX 2080 Ti |
@@ -90,7 +101,7 @@ Titan RTX (24 GB).
 | `b256-e30` | batch 256 | 0.499 +/- 0.013 | 0.540 | 0.457 | 0.713 / 0.690 | 0.449 / 0.317 | 0.458 / 0.365 | 0.513 | L40S |
 | `baseline-e30` | none (batch 32, 30 epochs) | 0.497 +/- 0.008 | 0.549 | 0.446 | 0.719 / 0.686 | 0.420 / 0.272 | 0.508 / 0.379 | 0.522 | RTX 2080 Ti |
 | `k100-e30` | 100 prototypes | 0.491 +/- 0.012 | 0.540 | 0.442 | 0.716 / 0.677 | 0.409 / 0.269 | 0.497 / 0.380 | 0.509 | RTX 2080 Ti |
-| `b128-lr1e-3-e30` | batch 128, learning rate 1e-3 | 0.489 +/- 0.008 | 0.540 | 0.438 | 0.709 / 0.685 | 0.461 / 0.281 | 0.450 / 0.347 | not read | Titan RTX |
+| `b128-lr1e-3-e30` | batch 128, learning rate 1e-3 | 0.489 +/- 0.008 | 0.540 | 0.438 | 0.709 / 0.685 | 0.461 / 0.281 | 0.450 / 0.347 | 0.501 | Titan RTX |
 | `k1000-e30` | 1000 prototypes | 0.487 +/- 0.017 | 0.539 | 0.436 | 0.715 / 0.674 | 0.425 / 0.266 | 0.476 / 0.367 | 0.510 | RTX 2080 Ti |
 | `blur-e30` | blur p = 0.5 | 0.484 +/- 0.007 | 0.543 | 0.424 | 0.719 / 0.662 | 0.413 / 0.254 | 0.497 / 0.356 | 0.513 | RTX 2080 Ti |
 | `jitter-e30` | jitter 0.8, 0.8, 0.8, 0.2 | 0.475 +/- 0.010 | 0.530 | 0.419 | 0.694 / 0.638 | 0.423 / 0.266 | 0.472 / 0.354 | 0.495 | RTX 2080 Ti |
@@ -101,7 +112,36 @@ Floor: the untrained ResNet9 for seeds 0-5 (`make_random_init.py`, CPU, so the s
 start of every Hydra run of that seed) scores 0.386 +/- 0.011 (challenge) and 0.366 (`main.py`). For
 seeds 0-2 the files are byte-identical to the laptop ones.
 
-### Ablations, one factor at a time (challenge score, difference in points)
+### 4.2 Second wave, 2026-11-12 to 2026-11-18 (all batch 128, means over seeds 0-5)
+
+| Configuration | Changed setting | Challenge score | `main.py` score | GPU |
+|---|---|---:|---:|---|
+| `b128-e1600` | 1600 epochs | 0.759 +/- 0.010 | 0.754 +/- 0.011 | Titan RTX (s0-2), RTX A6000 (s3-5) |
+| `b128-e800-eps0.03` | 800 epochs, epsilon 0.03 | 0.754 +/- 0.005 | 0.746 +/- 0.011 | Titan RTX |
+| `b128-e800` | 800 epochs | **0.751 +/- 0.007** | 0.748 +/- 0.009 | Titan RTX (s0-4), L40 (s5) |
+| `b128-e800-cos` | 800 epochs, 10 warm-up epochs, cosine decay to 0 | 0.737 +/- 0.009 | 0.731 +/- 0.006 | RTX A6000 (s0-2), L40 (s3-5) |
+| `b128-e200-eps0.02` | epsilon 0.02 | 0.715 +/- 0.007 | 0.721 +/- 0.007 | Titan RTX |
+| `b128-e200-eps0.03` | epsilon 0.03 | 0.715 +/- 0.007 | 0.714 +/- 0.008 | Titan RTX |
+| `b128-e200-eps0.01` | epsilon 0.01 | 0.711 +/- 0.005 | 0.717 +/- 0.011 | RTX A6000, Titan RTX |
+| `b128-e200` (from 4.1) | epsilon 0.05 (default) | 0.683 +/- 0.009 | 0.684 +/- 0.008 | Titan RTX |
+| `b128-e200-eps0.1` | epsilon 0.1 | 0.270 +/- 0.020 | 0.264 +/- 0.021 | RTX A6000, Titan RTX |
+
+Per-domain scores were not read for this wave.
+
+Training curves (challenge score, means over seeds 0-5, every 50 epochs for the 800-epoch runs and
+every 100 for `b128-e1600`):
+
+| Epoch | 50 | 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 1000 | 1200 | 1400 | 1600 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `b128-e800` | 0.535 | 0.604 | 0.684 | 0.717 | 0.730 | 0.738 | 0.743 | 0.748 | 0.751 | | | | |
+| `b128-e800-eps0.03` | 0.614 | 0.675 | 0.713 | 0.731 | 0.737 | 0.739 | 0.747 | 0.747 | 0.754 | | | | |
+| `b128-e800-cos` | 0.558 | 0.629 | 0.691 | 0.718 | 0.732 | 0.738 | 0.737 | 0.737 | 0.737 | | | | |
+| `b128-e1600` | | 0.604 | 0.683 | 0.713 | 0.729 | 0.738 | 0.744 | 0.745 | 0.749 | 0.751 | 0.756 | 0.762 | 0.759 |
+
+The cosine curve's points before epoch 800 are not runs of that length: its learning rate depends on
+the planned 800 epochs.
+
+### 4.3 Ablations, one factor at a time (challenge score, difference in points)
 
 | Question | Comparison | Difference (SE) | Verdict |
 |---|---|---:|---|
@@ -112,8 +152,16 @@ seeds 0-2 the files are byte-identical to the laptop ones.
 | | `b128-e200` vs `e200` | +9.2 (0.6) | Gain grows further; Galaxy10 +10.9 in both parts |
 | | `b256-e30` vs `b128-e30` | -1.2 (0.7) | No measurable difference |
 | Longer training at batch 128? | `b128-e100` vs `b128-e30` | +10.1 (0.6) | Helps |
-| | `b128-e200` vs `b128-e100` | +7.1 (0.5) | Helps; not yet saturated |
+| | `b128-e200` vs `b128-e100` | +7.1 (0.5) | Helps |
+| | `b128-e800` vs `b128-e200` | +6.8 (0.5) | Helps; the curve flattens after about 400-500 epochs |
+| | `b128-e1600` vs `b128-e800` | +0.8 (0.5) | Not significant (`main.py` score: +0.6, SE 0.6) |
 | Learning rate 1e-3 at batch 128? | `b128-lr1e-3-e30` vs `b128-e30` | -2.2 (0.6) | Hurts, mostly Imagenette; keep 5e-4 |
+| Cosine schedule? | `b128-e800-cos` vs `b128-e800` | -1.4 (0.5) | Hurts (`main.py` score: -1.7, SE 0.4); ahead early, flat from epoch 400 |
+| Sinkhorn epsilon at 200 epochs? | `eps0.03` vs `b128-e200` (0.05) | +3.2 (0.5) | Helps |
+| | `eps0.02` vs `b128-e200` | +3.2 (0.5) | Helps; same as 0.03 |
+| | `eps0.01` vs `b128-e200` | +2.8 (0.4) | Helps; same as 0.02 and 0.03 within noise |
+| | `eps0.1` vs `b128-e200` | -41.3 (0.9) | Collapse, below the untrained encoder |
+| Sinkhorn epsilon at 800 epochs? | `b128-e800-eps0.03` vs `b128-e800` | +0.3 (0.4) | No measurable difference |
 | Number of prototypes? | `k100-e30` vs `baseline-e30` | -0.6 (0.6) | No measurable difference |
 | | `k1000-e30` vs `baseline-e30` | -1.0 (0.8) | No measurable difference |
 | Blur? | `blur-e30` vs `baseline-e30` | -1.4 (0.5) | Hurts, mostly few-shot |
@@ -127,21 +175,40 @@ Notes on interpretation:
 - The two scorers disagree on `b128-e100` vs `e200`: equal by `main.py` score (0.625 each), +2.0 for
   `b128-e100` by challenge score. The per-domain average weights Galaxy10, where batch 128 helps
   most, as much as the other domains.
-- Not tested: why batch 128 helps, and Galaxy10 most. One guess: Sinkhorn spreads each batch evenly
-  over the 300 prototypes, so with 32 images per batch the targets are very soft (laptop phase:
-  assignment entropy 4.2-4.4 nats, maximum 5.70). The SwAV paper warns about small batches.
+- **Epsilon.** The SwAV paper sets epsilon to 0.05 for all runs and does not vary it; it states that a
+  high epsilon "generally leads to a trivial solution" in which all samples collapse, and therefore
+  keeps epsilon low (Caron et al. 2020, section 3.1 and appendix A.1). Our sweep confirms the collapse
+  at 0.1 and adds that 0.01-0.03 learn faster than 0.05. The 800-epoch curves show that the gain is
+  speed, not a higher end point: epsilon 0.03 leads by +7.9 at epoch 50, +2.9 at 200 and +0.7 at 400,
+  and both runs end at 0.75. `sinkhorn()` in `swav.py` works in log space, so a small epsilon cannot
+  overflow.
+- **Cosine.** The warm-up plus cosine schedule leads early (+2.3 at epoch 50, probably the warm-up;
+  not tested separately) and stops improving at about epoch 400, while the constant rate still gains
+  2 points. A guess, not tested: the model still learns at epoch 400, and cosine lowers the rate
+  towards 0 before it is done.
+- **Plateau.** No setting tried so far ends above about 0.76: neither twice the epochs nor sharper
+  targets. Our reading is that this encoder (or the 7,500 training images) sets the limit, not the
+  optimisation. This is an inference; the next test is a larger encoder.
 
-### Diagnostics (`swav_diagnostics.py`)
+### 4.4 Diagnostics (`swav_diagnostics.py`)
 
 The script loads a run's `checkpoint.pt` and reports the entropy of the Sinkhorn targets and how the
-training images spread over the prototypes, overall and per domain (labels are used for this split
-only). It is meant for the two open questions: why batch 128 helps and why Galaxy10 is weak. It has
-not run on the Hydra checkpoints yet. One laptop run so far (baseline, batch 32, 30 epochs, seed 0),
-so an observation and not a result:
+training images spread over the 300 prototypes, overall and per domain (labels are used for this
+split only). Run on the six `e200` (batch 32) and six `b128-e200` checkpoints, in eval mode, means
+over seeds:
 
-- The 250 labelled Galaxy10 images share 4 of the 300 prototypes; EuroSAT uses 61 and Imagenette 57.
-  All 7,500 images use 168 prototypes, about 39 effectively.
-- The target entropy is 3.93 nats (maximum 5.70). With the same model and batches of 128 it is 3.85.
+| | `e200` (batch 32) | `b128-e200` (batch 128) |
+|---|---:|---:|
+| Prototypes used (of 300) | 245 | 296 |
+| Effective number of prototypes | 143 | 239 |
+| Prototypes used by the labelled Galaxy10 images | 62 | 98 |
+| Target entropy, measured at batch 32 (nats) | 3.26 | 2.84 |
+| Target entropy, measured at batch 128 (nats) | 3.08 | 2.24 |
+
+The batch-128 models spread the images over more prototypes and produce sharper targets. The
+laptop observation that Galaxy10 shares only 4 prototypes (one 30-epoch run) does not hold for the
+200-epoch models. The epsilon sweep (4.3) then changed the target sharpness directly: sharper targets
+speed up learning, but do not raise the end point.
 
 ## 5. Leaderboard uploads
 
@@ -149,77 +216,83 @@ Only the latest upload counts. All uploads so far come from one participant ID. 
 one record per upload (file hash, both local scores, the leaderboard score once published);
 `proxy_validation.py` writes it and prints the correlation of the local scores with the leaderboard.
 
-| Date | Model | Local challenge score (seed / configuration mean) | Leaderboard score |
-|---|---|---|---|
-| 2026-11-11 | `b128-e100`, seed 2 | 0.623 / 0.612 | Not yet published (replaced) |
-| 2026-11-12 | `b128-e200`, seed 4 | 0.698 / 0.683 | Pending refresh |
+| Date | Model | Local challenge score | Local `main.py` score | Leaderboard score |
+|---|---|---:|---:|---:|
+| 2026-11-11 | `b128-e100`, seed 2 | 0.623 | 0.647 | Not scored (replaced before the refresh) |
+| 2026-11-12 | `b128-e200`, seed 4 | 0.698 | 0.680 | 0.5747 |
+| 2026-11-13 | `b128-e800`, seed 5 | 0.761 | 0.744 | 0.6157 |
+| 2026-11-14 | `b128-e800`, seed 5, kept model of epoch 100 | 0.592 | 0.616 | 0.5520 |
+| 2026-11-16 | `b128-e1600`, seed 0 | 0.766 | 0.768 | 0.6233 |
 
-Both files passed `test_submission.py` (13.3 MiB). The chosen seed is the best of six by local score,
-so the leaderboard will likely land nearer the configuration mean.
+All files passed `test_submission.py` (13.3 MiB). The 2026-11-12 seed was the best of six by local
+score; the 2026-11-13 seed was the first to finish; from 2026-11-16 on we upload seed 0 by rule. The
+epoch-100 model was uploaded on purpose as a weaker point, to spread the local scores for the
+correlation.
 
-Plan to validate the local score (the "upload ladder"): one model per leaderboard refresh, spanning
-the whole range of local scores, each recorded with `proxy_validation.py add` before the upload and
-`proxy_validation.py leaderboard` after the refresh. The 2026-11-11 upload was replaced before it was
-scored, so every rung has to wait for its score.
+Correlation over the four scored uploads (`proxy_validation.py report`):
 
-| Rung | Model | Local challenge score (configuration mean) |
-|---|---|---:|
-| 1 | Untrained ResNet9 (floor) | 0.386 |
-| 2 | `baseline-e30` | 0.497 |
-| 3 | `e100` | 0.548 |
-| 4 | `b128-e100` | 0.612 |
-| 5 | `b128-e200` (uploaded 2026-11-12, waiting for its score) | 0.683 |
+| Local score | Pearson | Spearman | Slope (leaderboard points per local point) |
+|---|---:|---:|---:|
+| Challenge score | 0.957 | 1.000 | 0.40 |
+| `main.py` score | 0.992 | 1.000 | 0.49 |
 
-The best model must be uploaded again last, because only the latest upload counts. With five points
-a correlation is rough evidence; the per-seed spread (about 1 point) is small against the 30-point
-range of the ladder.
+- The local scores rank all four uploads in the leaderboard's order.
+- The leaderboard compresses differences: a local gain of 1 point is worth about 0.4-0.5 leaderboard
+  points. In absolute terms the local challenge scores are higher, by 4 points for the weakest upload
+  and 12-15 points for the others. A likely reason: the leaderboard tests held-out images and new
+  classes, our scorer tests images seen in training.
+- Before the 2026-11-17 refresh we predicted 0.61-0.63 for the 1600-epoch upload from a line through
+  the first three points; it scored 0.6233.
+- Four points are weak evidence. More points, for example from the group's other methods scored with
+  the same `challenge_score.py`, would make the check stronger.
 
 ## 6. Open points and next steps
 
-1. **Leaderboard check:** when it refreshes, record the official score of the 2026-11-12 upload and
-   continue with the upload ladder of section 5. Not done: running the pre-release `evaluate.py` on
-   our models as a second local proxy.
-2. **Retrain budget:** Randall retrains `main.py` offline. `b128-e200` takes 2.7-4.7 hours per seed on
-   a Titan RTX. We need the retrain time and hardware limit before training even longer.
-3. **`main.py` defaults:** they describe `b128-e200` since 2026-11-12 and must follow the best
-   configuration if it changes before the code hand-in. Still to do: confirm the recipe exactly as
-   handed in (defaults, so no loader workers) once with seeds 0-5 on Hydra; `b128-e200` was measured
-   with 4 workers.
-4. **Longer training:** the score still rises from 100 to 200 epochs. The next test is one 800-epoch
-   run per seed at batch 128 with `--keep-evaluated-models --eval-every 50`: the learning rate is
-   constant, so the kept model of epoch N is the model a run of N epochs would give (exactly on CPU,
-   up to GPU rounding on the cluster), and `challenge_score.py` can score the whole curve. This run
-   (`b128-e800`) was started on 2026-11-12. After it: the warm-up plus cosine schedule
-   (`--lr-schedule cosine --warmup-epochs 10`) against the constant rate, at the length the curve
-   suggests.
-5. **Galaxy10** is still the weakest domain and a third of the score. Next: `swav_diagnostics.py` on
-   the six `e200` and the six `b128-e200` checkpoints, each at batch 32 and at batch 128. A
-   step-matched control for the batch comparison is also open: batch 32 for 800 epochs makes as many
-   optimiser steps as batch 128 for 3,200 epochs, and batch 32 for 200 epochs as many as batch 128
-   for 800, which the `b128-e800` curve will give.
-6. **Group:** agree on the final model and on who uploads, since only the latest upload counts.
-7. **Reproducibility:** the Hydra job scripts are in `cluster/` since 2026-11-12 (see section 7). The
-   runs in this file were started with an earlier copy of the training script, whose defaults were
-   an RTX 2080 Ti and 4 hours.
+1. **Larger encoder (decided 2026-11-18).** Replace the ResNet9 with a randomly initialised, narrowed
+   ResNet18, trained from scratch with SwAV. The standard ResNet18 (widths 64-512, 11.2M parameters,
+   about 43 MiB) is over the 20 MiB cap. A version with widths 40-80-160-320 and a 3x3 stride-1 stem,
+   as used in the group's DINO track, has about 4.37M parameters (about 16.7 MiB) and about 1.96 GMACs
+   per 96 px image, against 2.57 for our ResNet9 (estimates, not measured on an export). Sharing the
+   exact backbone code with the group makes the method comparison fair. Needs a code change: an
+   encoder option in `swav.py` and `main.py`.
+2. **`main.py` defaults:** still batch 128 and 200 epochs. To change to 800 epochs (decision
+   2026-11-16). Epsilon can stay at the paper's 0.05, since 0.03 makes no difference at 800 epochs.
+   Still to do: confirm the recipe exactly as handed in (defaults, so no loader workers) once with
+   seeds 0-5 on Hydra.
+3. **Retrain budget:** unknown; treated as no constraint for now (decision 2026-11-12). 800 epochs take
+   about 4.5 hours on an L40 or RTX A6000 and 8.5-9 hours on a Titan RTX. If the budget turns out to
+   be tight, epsilon 0.03 reaches the same level in fewer epochs (0.746 at epoch 550).
+4. **Proxy:** our scorer tests images seen in training. A held-out-image variant (pretrain on 5/6 of
+   the images, probe on the rest, rotating over 6 folds instead of 6 seeds) would match the
+   leaderboard better at the same cost. New classes cannot be simulated: 90% of the images have no
+   label, so we cannot remove a class from training.
+5. **Galaxy10** is still the weakest domain and a third of the score.
+6. **Group:** one shared encoder, one scorer and one `main.py`; agree on the final model and on who
+   uploads, since only the latest upload counts. The best model must be uploaded again last.
+7. **Step-matched batch control:** open. Batch 32 for 200 epochs makes as many optimiser steps as
+   batch 128 for 800.
 
 ## 7. Practical notes on Hydra
 
 - `sbatch cluster/train_seeds.sh NAME [main.py options]` trains seeds 0-5 as a job array with one GPU
   per seed (4 CPUs, 16 GB RAM, `--num-workers 4`, an evaluation every 5 epochs) and writes
   `runs/hydra-NAME-sSEED/`. `sbatch cluster/score_models.sh NAME` then scores the six models in one CPU
-  job, and `uv run cluster/summarize.py` prints mean, standard deviation, minimum and maximum per
-  configuration (`--curve NAME`: per evaluated epoch).
-- RTX 2080 Ti (11 GB) runs batch 32. Batch 128 ran out of memory there and needs a Titan RTX (24 GB)
-  or larger; batch 256 ran on an L40S.
-- 200-epoch runs used a 16-hour limit. They took 2.7-4.7 hours, but one `e200` seed ran at 110 s
-  per epoch on one node instead of about 38 s and was restarted on another node.
-- `challenge_score.py` must use only the CPUs the job may use (fixed in `b684337`). Scoring all six
-  models in one CPU job takes a few minutes.
-- `evaluate.py` (upstream) starts one thread per node CPU. The evaluations during training therefore
-  use `training.probe_score`, which computes the same score with only the job's CPUs. Runs before this
-  change called `evaluate.py` directly, which slowed their evaluations.
+  job (`NAME curve`: every kept model), and `uv run cluster/summarize.py` prints mean, standard
+  deviation, minimum and maximum per configuration (`--curve NAME`: per evaluated epoch).
+- GPUs for batch 128: Titan RTX (24 GB, about 38 s per epoch), L40 (about 17 s), RTX A6000 (about
+  20 s); the L40, L40S and A6000 are often fully booked. The RTX 2080 Ti (11 GB) runs out of memory
+  at batch 128; the GTX 1080 and 1080 Ti are not supported by the installed PyTorch. Check free GPUs
+  with `sinfo -p gpus -N -O "NodeList:10,Gres:45,GresUsed:55,StateCompact:8"` and pass `--gres=...`
+  on the command line; split the seeds over GPU types with `--array` if needed.
+- Long runs need `--time` (30 hours for 800 epochs, 40 for 1600). Some runs slowed to 2-4 times
+  their usual time per epoch on node `gpu2001` and repeatedly for array task 0; `--exclude=gpu2001`
+  avoids the node. `main.py` cannot resume, so a slow run has to finish or restart from epoch 0.
+- A job pending with `Reason=Priority` waits for higher-priority jobs, even when a GPU is idle.
+- `challenge_score.py` and the evaluations during training use only the job's CPUs (`evaluate.py`
+  upstream starts one thread per node CPU). Scoring six final models takes about 3 minutes, a full
+  curve 15-30 minutes.
 
-## Appendix: challenge score per seed
+## Appendix: challenge score per seed (first wave)
 
 | Configuration | s0 | s1 | s2 | s3 | s4 | s5 |
 |---|---:|---:|---:|---:|---:|---:|
@@ -237,3 +310,5 @@ range of the ladder.
 | `jitter-e30` | 0.479 | 0.462 | 0.481 | 0.467 | 0.470 | 0.488 |
 
 \* Restarted on another node after the first attempt ran slowly (same seed and settings).
+
+Per-seed scores of the second wave are in `runs/hydra-challenge-scores-NAME.json` on Hydra.

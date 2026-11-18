@@ -61,6 +61,10 @@ training budget, seeds and scorer.
   `swav_diagnostics.py` (target entropy, prototype usage per domain) and
   `proxy_validation.py` with `uploads.json` (upload record, correlation with the
   leaderboard). The evaluation during training uses only the job's CPUs.
+- 2026-11-12 to 2026-11-18: second Hydra wave (800 and 1600 epochs, cosine schedule,
+  Sinkhorn epsilon 0.01-0.1, diagnostics) and four scored leaderboard uploads. Best:
+  batch 128 for 800 epochs, challenge score 0.751 +/- 0.007; every long run ends at
+  about 0.75-0.76. See `SWAV-SUMMARY.md`.
 
 ## Decisions
 | Setting | Value | Why |
