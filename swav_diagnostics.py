@@ -152,7 +152,8 @@ def diagnose(run_dir, data_path, batch_size=None, device="cpu", domain_of_class=
         str(data_path), batch_size, SEED,
         color_jitter=settings.get("color_jitter", swav_data.DEFAULT_COLOR_JITTER),
         blur_probability=settings.get("blur_probability", 0.0),
-        local_crop_area=settings.get("local_crop_area", swav_data.LOCAL_CROP_AREA))
+        local_crop_area=settings.get("local_crop_area", swav_data.LOCAL_CROP_AREA),
+        degrade_probability=settings.get("degrade_probability", 0.0))
     result = {"batch_size": batch_size, "prototypes": num_prototypes, "max_entropy": math.log(num_prototypes),
               "target_entropy": target_entropy(model, loader, settings["epsilon"], settings["sinkhorn_iterations"],
                                                device)}

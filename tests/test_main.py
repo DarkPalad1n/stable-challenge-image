@@ -30,6 +30,7 @@ def test_defaults_are_the_configuration_we_hand_in():
         "epochs": 200, "batch_size": 128, "learning_rate": 5e-4, "weight_decay": 0.05,
         "lr_schedule": "constant", "warmup_epochs": 0,
         "color_jitter": [0.4, 0.4, 0.2, 0.1], "blur_probability": 0.0, "local_crop_area": [0.05, 0.14],
+        "degrade_probability": 0.0,
         "backbone": "resnet9", "prototypes": 300, "epsilon": 0.05, "sinkhorn_iterations": 3, "temperature": 0.1,
         "freeze_prototypes_epochs": 1, "queue_length": 0,
     }
@@ -137,6 +138,15 @@ def test_augmentation_settings_reach_the_loader(eval_data, tmp_path):
     assert blurred[0]["loss"] != default[0]["loss"]
     assert jittered[0]["loss"] != default[0]["loss"]
     assert larger_local_crops[0]["loss"] != default[0]["loss"]
+    degraded = train(eval_data, tmp_path / "degraded", "--epochs", "1", "--degrade-probability", "1")
+    assert degraded[0]["loss"] != default[0]["loss"]
+
+
+@pytest.mark.parametrize("probability", ["-0.1", "1.5"])
+def test_degrade_probability_is_checked_before_anything_is_written(eval_data, tmp_path, probability):
+    with pytest.raises(ValueError, match="--degrade-probability"):
+        train(eval_data, tmp_path / "run", "--degrade-probability", probability)
+    assert not (tmp_path / "run").exists()
 
 
 def test_narrow_resnet18_trains_and_exports_a_valid_submission(eval_data, tmp_path):

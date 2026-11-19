@@ -130,3 +130,47 @@ def test_blur_smooths_the_crop_and_changes_nothing_else():
         sharp, blurred = crops
         assert neighbour_difference(blurred) < neighbour_difference(sharp)
         torch.testing.assert_close(blurred.mean(), sharp.mean(), atol=0.05, rtol=0)
+
+
+def textured_crop(size=swav_data.GLOBAL_CROP_SIZE, seed=0):
+    """An RGB crop with fine detail, so that every degradation visibly changes it."""
+    return PILImage.fromarray(np.random.default_rng(seed).integers(0, 256, (size, size, 3), dtype=np.uint8))
+
+
+def test_degrade_is_left_out_unless_enabled():
+    def degrade_steps(**settings):
+        return [step for step in augmentation_steps(**settings) if isinstance(step, swav_data.Degrade)]
+
+    assert degrade_steps() == []
+    assert degrade_steps(degrade_probability=0.0) == []
+    [degrade] = degrade_steps(degrade_probability=0.3)
+    assert degrade.p == 0.3
+
+
+@pytest.mark.parametrize("degradation, strength", [(swav_data.add_noise, 0.05), (swav_data.blur, 1.0),
+                                                   (swav_data.lower_resolution, 0.5)])
+@pytest.mark.parametrize("size", [swav_data.GLOBAL_CROP_SIZE, swav_data.LOCAL_CROP_SIZE])
+def test_every_degradation_changes_the_crop_and_keeps_its_format(degradation, strength, size):
+    crop = textured_crop(size)
+    degraded = degradation(crop, strength)
+    assert degraded.size == crop.size and degraded.mode == "RGB"
+    assert neighbour_difference(torch.tensor(np.asarray(degraded), dtype=torch.float32)) != \
+        neighbour_difference(torch.tensor(np.asarray(crop), dtype=torch.float32))
+
+
+def test_degrade_always_or_never_applies_at_probability_one_or_zero():
+    crop = textured_crop()
+    torch.manual_seed(0)
+    assert swav_data.Degrade(0.0)({"image": crop})["image"] is crop
+    for seed in range(5):
+        torch.manual_seed(seed)
+        degraded = swav_data.Degrade(1.0)({"image": crop})["image"]
+        assert not np.array_equal(np.asarray(degraded), np.asarray(crop))
+
+
+def test_degrade_is_repeatable_with_the_same_torch_seed():
+    crops = []
+    for _ in range(2):
+        torch.manual_seed(3)
+        crops.append([np.asarray(swav_data.Degrade(0.5)({"image": textured_crop(seed=s)})["image"]) for s in range(8)])
+    assert all(np.array_equal(a, b) for a, b in zip(*crops))

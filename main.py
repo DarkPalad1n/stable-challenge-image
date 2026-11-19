@@ -74,6 +74,9 @@ def parse_arguments(argv=None):
                               help="colour jitter strength; the SwAV paper uses 0.8 0.8 0.8 0.2")
     augmentation.add_argument("--blur-probability", type=float, default=0.0,
                               help="chance that a crop is Gaussian-blurred; the SwAV paper uses 0.5")
+    augmentation.add_argument("--degrade-probability", type=float, default=0.0,
+                              help="chance that a crop is degraded by Gaussian noise, blur or a lower "
+                                   "resolution (one of them, random strength; see swav_data.Degrade); 0 = off")
     augmentation.add_argument("--local-crop-area", type=float, nargs=2, default=list(swav_data.LOCAL_CROP_AREA),
                               metavar=("MIN", "MAX"),
                               help="fraction of the image area a local crop covers, before it is resized to "
@@ -148,13 +151,16 @@ def main(argv=None):
     smallest_area, largest_area = args.local_crop_area
     if not 0 < smallest_area <= largest_area <= 1:
         raise ValueError(f"--local-crop-area {smallest_area} {largest_area} must satisfy 0 < MIN <= MAX <= 1")
+    if not 0 <= args.degrade_probability <= 1:
+        raise ValueError(f"--degrade-probability {args.degrade_probability} must lie in [0, 1]")
     args.output.mkdir(parents=True, exist_ok=False)
     device = training.resolve_device(args.device)
     training.seed_everything(args.seed)
     save_json(args.output / "config.json", run_config(args, device))
 
     loader = swav_data.make_train_loader(args.data, args.batch_size, args.seed, args.num_workers,
-                                         args.color_jitter, args.blur_probability, args.local_crop_area)
+                                         args.color_jitter, args.blur_probability, args.local_crop_area,
+                                         args.degrade_probability)
     if len(loader) == 0:
         raise ValueError(f"--batch-size {args.batch_size} is larger than the training set")
     model = swav.SwAVModel(args.prototypes, args.backbone).to(device)

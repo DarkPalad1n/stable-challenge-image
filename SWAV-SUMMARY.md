@@ -45,7 +45,7 @@ detailed log of the laptop phase (up to 2026-11-10); for everything later, this 
 | Encoder | ResNet9 (`stable_pretraining.backbone.Resnet9`), 1024-dim output, 3.49M parameters, 13.3 MiB ONNX (cap 20 MiB). Option `--backbone resnet18-narrow` (branch `resnet18`): ResNet18 layout with stages of 40-80-160-320 channels, 3x3 stem, BatchNorm momentum 0.9 as in the ResNet9, 320-dim output zero-padded to 1024, 4.37M parameters, 16.7 MiB ONNX (results in 4.2) |
 | Head | Projector 1024-1024-128, then prototypes (default 300) |
 | Crops | 2 global (96 px, scale 0.14-1) + 4 local (48 px, scale 0.05-0.14; set with `--local-crop-area`) |
-| Augmentation | Colour jitter 0.4, 0.4, 0.2, 0.1 (p = 0.8), grayscale; no blur, no solarize |
+| Augmentation | Colour jitter 0.4, 0.4, 0.2, 0.1 (p = 0.8), grayscale; no blur, no solarize. Option `--degrade-probability` (default 0, off): each crop is degraded with this chance by Gaussian noise (sigma 0.02-0.10), blur (radius 0.5-2 px) or a lower resolution (0.33-0.75 of the side), one of them at random; JPEG is left out so the shift score keeps one unseen shift; untested so far |
 | SwAV | Sinkhorn epsilon 0.05, 3 iterations (log space), temperature 0.1; prototypes frozen in epoch 1; targets from the global crops only |
 | Optimiser | AdamW, learning rate 5e-4, weight decay 0.05, constant. Optional: `--warmup-epochs` and `--lr-schedule cosine` (tested, worse) |
 | Defaults in `main.py` | Batch 128, 200 epochs, seed 0; data loading in the main process. To be raised to 800 epochs (section 6) |
