@@ -30,7 +30,7 @@ def test_defaults_are_the_configuration_we_hand_in():
         "epochs": 200, "batch_size": 128, "learning_rate": 5e-4, "weight_decay": 0.05,
         "lr_schedule": "constant", "warmup_epochs": 0,
         "color_jitter": [0.4, 0.4, 0.2, 0.1], "blur_probability": 0.0, "local_crop_area": [0.05, 0.14],
-        "prototypes": 300, "epsilon": 0.05, "sinkhorn_iterations": 3, "temperature": 0.1,
+        "backbone": "resnet9", "prototypes": 300, "epsilon": 0.05, "sinkhorn_iterations": 3, "temperature": 0.1,
         "freeze_prototypes_epochs": 1, "queue_length": 0,
     }
     assert {name: settings[name] for name in expected} == expected
@@ -137,6 +137,14 @@ def test_augmentation_settings_reach_the_loader(eval_data, tmp_path):
     assert blurred[0]["loss"] != default[0]["loss"]
     assert jittered[0]["loss"] != default[0]["loss"]
     assert larger_local_crops[0]["loss"] != default[0]["loss"]
+
+
+def test_narrow_resnet18_trains_and_exports_a_valid_submission(eval_data, tmp_path):
+    history = train(eval_data, tmp_path / "run", "--epochs", "1", "--backbone", "resnet18-narrow")
+    assert history[-1]["epoch"] == 1 and "score" in history[-1]
+    assert (tmp_path / "run" / "model.onnx").is_file()
+    config = json.loads((tmp_path / "run" / "config.json").read_text())
+    assert config["settings"]["backbone"] == "resnet18-narrow"
 
 
 @pytest.mark.parametrize("area", [("0", "0.14"), ("0.4", "0.14"), ("0.14", "1.5")])

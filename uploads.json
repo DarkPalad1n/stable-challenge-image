@@ -43,5 +43,14 @@
     "main_score": 0.768,
     "leaderboard_score": 0.6233,
     "note": "hand-in candidate (1600 epochs, seed 0 by rule, not picked by score)"
+  },
+  {
+    "date": "2026-11-19",
+    "name": "b128-e800-r18-s0",
+    "sha256": "0caf4d16480a88404c4c8f6f83f19dd150c534d0917b554f6c5c73a83d8c06e3",
+    "challenge_score": 0.7551,
+    "main_score": 0.7653,
+    "leaderboard_score": null,
+    "note": "narrow ResNet18 backbone; predicted 0.612 (challenge fit) vs 0.623 (main.py fit)"
   }
 ]

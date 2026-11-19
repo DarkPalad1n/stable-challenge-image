@@ -22,24 +22,111 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-EMBEDDING_DIM = 1024  # backbone output size, equal to the submission's embedding size
+EMBEDDING_DIM = 1024  # the submission's embedding size; smaller backbone outputs are zero-padded on export
 PROJECTOR_HIDDEN_DIM = 1024
 PROJECTION_DIM = 128
 
+BACKBONES = ("resnet9", "resnet18-narrow")
+NARROW_RESNET18_WIDTHS = (40, 80, 160, 320)  # channels of the four stages
+# stable-pretraining's Resnet9 uses this BatchNorm momentum, so the running statistics follow the last
+# backbone pass (see SwAVModel.embed_crops). The narrow ResNet18 uses the same value.
+BATCHNORM_MOMENTUM = 0.9
+
+
+class BasicBlock(nn.Module):
+    """ResNet basic block (He et al., 2016): two 3x3 convolutions plus a shortcut."""
+
+    def __init__(self, in_channels, out_channels, stride):
+        """Build the block.
+
+        Args:
+            in_channels: Channels of the input.
+            out_channels: Channels of the output.
+            stride: Stride of the first convolution; 2 halves the resolution.
+        """
+        super().__init__()
+        self.residual = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 3, stride, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels, momentum=BATCHNORM_MOMENTUM),
+            nn.ReLU(),
+            nn.Conv2d(out_channels, out_channels, 3, 1, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels, momentum=BATCHNORM_MOMENTUM),
+        )
+        if stride == 1 and in_channels == out_channels:
+            self.shortcut = nn.Identity()
+        else:  # a 1x1 convolution matches the shape of the residual branch
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, 1, stride, bias=False),
+                nn.BatchNorm2d(out_channels, momentum=BATCHNORM_MOMENTUM),
+            )
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        return self.relu(self.residual(x) + self.shortcut(x))
+
+
+class NarrowResNet18(nn.Module):
+    """The ResNet18 layout with narrower stages, for 96-pixel images and the 20 MiB cap.
+
+    A standard ResNet18 (stages of 64-512 channels, 11.2M parameters, about 43 MiB) is over the
+    cap, and its 7x7 stride-2 stem with max pooling shrinks a 96-pixel image to a quarter at once.
+    This version keeps the four stages of two basic blocks each, with ``NARROW_RESNET18_WIDTHS``
+    channels (4.37M parameters, about 16.7 MiB), starts with a 3x3 stride-1 convolution as
+    ResNets for small images do, and ends with global average pooling. Weights start at random.
+    """
+
+    def __init__(self, widths=NARROW_RESNET18_WIDTHS):
+        """Build the network.
+
+        Args:
+            widths: Channels of the four stages; the output has ``widths[-1]`` features.
+        """
+        super().__init__()
+        layers = [nn.Conv2d(3, widths[0], 3, 1, padding=1, bias=False),
+                  nn.BatchNorm2d(widths[0], momentum=BATCHNORM_MOMENTUM),
+                  nn.ReLU()]
+        in_channels = widths[0]
+        for stage, width in enumerate(widths):
+            layers += [BasicBlock(in_channels, width, stride=1 if stage == 0 else 2), BasicBlock(width, width, 1)]
+            in_channels = width
+        layers += [nn.AdaptiveAvgPool2d(1), nn.Flatten()]
+        self.layers = nn.Sequential(*layers)
+        self.output_dim = widths[-1]
+
+    def forward(self, images):
+        return self.layers(images)
+
+
+def make_backbone(name):
+    """Build a randomly initialised backbone and return it with its output size.
+
+    Args:
+        name: One of ``BACKBONES``: "resnet9" (stable-pretraining's ResNet9, 1024 features) or
+            "resnet18-narrow" (``NarrowResNet18``, 320 features).
+    """
+    if name == "resnet9":
+        return spt.backbone.Resnet9(EMBEDDING_DIM, 3), EMBEDDING_DIM
+    if name == "resnet18-narrow":
+        backbone = NarrowResNet18()
+        return backbone, backbone.output_dim
+    raise ValueError(f"unknown backbone {name!r}, expected one of {BACKBONES}")
+
 
 class SwAVModel(nn.Module):
-    """ResNet9 backbone followed by a projection head and the prototypes."""
+    """Backbone followed by a projection head and the prototypes."""
 
-    def __init__(self, num_prototypes):
+    def __init__(self, num_prototypes, backbone="resnet9"):
         """Build the model.
 
         Args:
             num_prototypes: Number of prototype vectors (the "clusters" crops are assigned to).
+            backbone: Name of the backbone, see ``make_backbone``. It is built first, so with the
+                same seed it starts from the same weights as ``make_random_init.py`` exports.
         """
         super().__init__()
-        self.backbone = spt.backbone.Resnet9(EMBEDDING_DIM, 3)
+        self.backbone, backbone_dim = make_backbone(backbone)
         self.projector = nn.Sequential(
-            nn.Linear(EMBEDDING_DIM, PROJECTOR_HIDDEN_DIM),
+            nn.Linear(backbone_dim, PROJECTOR_HIDDEN_DIM),
             nn.BatchNorm1d(PROJECTOR_HIDDEN_DIM),
             nn.ReLU(),
             nn.Linear(PROJECTOR_HIDDEN_DIM, PROJECTION_DIM),
@@ -55,7 +142,7 @@ class SwAVModel(nn.Module):
     def embed_crops(self, crops):
         """Embed all crops with the backbone, one backbone pass per crop resolution.
 
-        The smallest resolution goes first. The ResNet9's BatchNorm layers use
+        The smallest resolution goes first. The backbones' BatchNorm layers use
         ``momentum=0.9``, so their running statistics, which the exported model uses,
         come almost entirely from the last pass. Ending on the global crops keeps those
         statistics at the 96-pixel resolution the evaluator uses.
@@ -64,7 +151,7 @@ class SwAVModel(nn.Module):
             crops: List of crop batches, each of shape [batch_size, 3, size, size].
 
         Returns:
-            Tensor of shape [num_crops * batch_size, EMBEDDING_DIM], in the order of ``crops``.
+            Tensor of shape [num_crops * batch_size, backbone output size], in the order of ``crops``.
         """
         embeddings_per_crop = [None] * len(crops)
         for resolution in sorted({crop.shape[-1] for crop in crops}):
