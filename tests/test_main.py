@@ -32,6 +32,7 @@ def test_defaults_are_the_configuration_we_hand_in():
         "color_jitter": [0.4, 0.4, 0.2, 0.1], "blur_probability": 0.0, "local_crop_area": [0.05, 0.14],
         "backbone": "resnet9", "prototypes": 300, "epsilon": 0.05, "sinkhorn_iterations": 3, "temperature": 0.1,
         "freeze_prototypes_epochs": 1, "queue_length": 0,
+        "sigreg_weight": 0.0, "sigreg_slices": 1024,
     }
     assert {name: settings[name] for name in expected} == expected
 
@@ -44,6 +45,7 @@ def test_run_writes_every_output(eval_data, tmp_path):
     assert all(0 <= record["score"] <= 1 for record in history)
     config = json.loads((run_dir / "config.json").read_text())
     assert config["settings"]["seed"] == 0 and config["device"] == "cpu"
+    assert all("swav_loss" not in record and "sigreg_loss" not in record for record in history)
 
 
 def test_last_epoch_is_always_evaluated(eval_data, tmp_path):
@@ -152,3 +154,33 @@ def test_local_crop_area_is_checked_before_anything_is_written(eval_data, tmp_pa
     with pytest.raises(ValueError, match="--local-crop-area"):
         train(eval_data, tmp_path / "run", "--local-crop-area", *area)
     assert not (tmp_path / "run").exists()
+
+
+@pytest.mark.parametrize("arguments", [("--sigreg-weight", "-0.1"), ("--sigreg-slices", "0")])
+def test_sigreg_settings_are_checked_before_anything_is_written(tmp_path, arguments):
+    output = tmp_path / "run"
+    with pytest.raises(ValueError, match="--sigreg"):
+        main.main(["--output", str(output), *arguments])
+    assert not output.exists()
+
+
+def test_sigreg_run_records_the_loss_parts_and_is_repeatable(eval_data, tmp_path):
+    default = train(eval_data, tmp_path / "default", "--epochs", "1")
+    options = ("--epochs", "1", "--sigreg-weight", "0.1", "--sigreg-slices", "8")
+    first = train(eval_data, tmp_path / "first", *options)
+    again = train(eval_data, tmp_path / "again", *options)
+    for key in ("loss", "swav_loss", "sigreg_loss", "score"):
+        assert first[0][key] == again[0][key]
+    assert first[0]["loss"] != default[0]["loss"]
+    assert first[0]["loss"] == pytest.approx(first[0]["swav_loss"] + 0.1 * first[0]["sigreg_loss"], abs=1e-4)
+    config = json.loads((tmp_path / "first" / "config.json").read_text())
+    assert config["settings"]["sigreg_weight"] == 0.1 and config["settings"]["sigreg_slices"] == 8
+
+
+def test_default_run_never_calls_sigreg(eval_data, tmp_path, monkeypatch):
+    def unexpected_sigreg(*args, **kwargs):
+        pytest.fail("SIGReg must not run at weight 0")
+
+    monkeypatch.setattr(main.swav, "sigreg", unexpected_sigreg)
+    history = train(eval_data, tmp_path / "run", "--epochs", "1")
+    assert "swav_loss" not in history[0] and "sigreg_loss" not in history[0]

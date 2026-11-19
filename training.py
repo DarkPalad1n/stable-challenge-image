@@ -14,6 +14,7 @@ import torch
 from datasets import Dataset
 
 import evaluate
+import swav
 from export_onnx import export_onnx
 
 
@@ -70,7 +71,8 @@ def make_scheduler(optimizer, schedule, warmup_steps, total_steps):
         optimizer, lambda step: learning_rate_factor(step, schedule, warmup_steps, total_steps))
 
 
-def train_one_epoch(model, loader, optimizer, loss_function, device, freeze_prototypes, queue=None, scheduler=None):
+def train_one_epoch(model, loader, optimizer, loss_function, device, freeze_prototypes, queue=None, scheduler=None,
+                    sigreg_weight=0.0, sigreg_slices=1024, sigreg_generator=None, loss_parts=None):
     """Run one pass over the training data and return the mean loss.
 
     Args:
@@ -88,18 +90,38 @@ def train_one_epoch(model, loader, optimizer, loss_function, device, freeze_prot
             batches only.
         scheduler: Optional learning-rate scheduler from ``make_scheduler``, advanced
             after every optimiser step. Without one the learning rate stays as it is.
+        sigreg_weight: Weight added to the unchanged SwAV loss; 0 skips SIGReg entirely.
+        sigreg_slices: Random directions per SIGReg statistic.
+        sigreg_generator: Dedicated generator, created once for the run on ``device``.
+        loss_parts: Optional dict filled with epoch means of ``swav_loss`` and ``sigreg_loss``
+            when SIGReg is enabled. The return value remains the mean total loss.
+
+    SIGReg is computed separately over the images of every crop and then averaged over
+    crops, matching LeJEPA MINIMAL.md's per-view statistic. Pooling crops would instead
+    regularise their mixture and count correlated views as independent images.
     """
     model.train()
     total_loss = 0.0
+    total_swav_loss = total_sigreg_loss = 0.0
     for crops in loader:
         model.normalize_prototypes()
-        crop_projections, crop_scores = model([crop.to(device) for crop in crops])
+        if sigreg_weight > 0:
+            crop_projections, crop_scores, raw_projections = model(
+                [crop.to(device) for crop in crops], return_raw=True)
+        else:
+            crop_projections, crop_scores = model([crop.to(device) for crop in crops])
         queue_scores = None
         if queue is not None:
             if queue.is_full:
                 queue_scores = queue.scores(model.prototypes)
             queue.push(crop_projections)
         loss = loss_function(crop_scores, queue_scores=queue_scores)
+        if sigreg_weight > 0:
+            regulariser = torch.stack([swav.sigreg(raw, sigreg_slices, sigreg_generator)
+                                       for raw in raw_projections]).mean()
+            total_swav_loss += loss.item()
+            total_sigreg_loss += regulariser.item()
+            loss = loss + sigreg_weight * regulariser
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         if freeze_prototypes:
@@ -108,6 +130,8 @@ def train_one_epoch(model, loader, optimizer, loss_function, device, freeze_prot
         if scheduler is not None:
             scheduler.step()
         total_loss += loss.item()
+    if sigreg_weight > 0 and loss_parts is not None:
+        loss_parts.update(swav_loss=total_swav_loss / len(loader), sigreg_loss=total_sigreg_loss / len(loader))
     return total_loss / len(loader)
 
 

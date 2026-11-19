@@ -25,6 +25,7 @@ from torch import nn
 EMBEDDING_DIM = 1024  # the submission's embedding size; smaller backbone outputs are zero-padded on export
 PROJECTOR_HIDDEN_DIM = 1024
 PROJECTION_DIM = 128
+SIGREG_INTEGRATION_POINTS = 17  # LeJEPA MINIMAL.md, trapezoidal integration on [0, 3]
 
 BACKBONES = ("resnet9", "resnet18-narrow")
 NARROW_RESNET18_WIDTHS = (40, 80, 160, 320)  # channels of the four stages
@@ -161,7 +162,7 @@ class SwAVModel(nn.Module):
                 embeddings_per_crop[index] = crop_embeddings
         return torch.cat(embeddings_per_crop)
 
-    def forward(self, crops):
+    def forward(self, crops, return_raw=False):
         """Project every crop onto the unit sphere and score it against every prototype.
 
         All crops go through the projector together, so its BatchNorm sees global and
@@ -169,17 +170,54 @@ class SwAVModel(nn.Module):
 
         Args:
             crops: List of crop batches as yielded by ``swav_data.make_train_loader``.
+            return_raw: Also return the unnormalised projector outputs, without another forward pass.
 
         Returns:
             Two lists with one entry per crop, in the order of ``crops``:
             projections, each of shape [batch_size, PROJECTION_DIM] and of unit length;
             scores, each of shape [batch_size, num_prototypes]. Scores are cosine
             similarities, so they lie in [-1, 1].
+            With ``return_raw=True``, a third list holds the unnormalised projections per crop.
         """
         batch_size = crops[0].shape[0]
-        projections = F.normalize(self.projector(self.embed_crops(crops)), dim=1)
+        raw_projections = self.projector(self.embed_crops(crops))
+        projections = F.normalize(raw_projections, dim=1)
         crop_scores = self.prototypes(projections)
+        if return_raw:
+            return (list(projections.split(batch_size)), list(crop_scores.split(batch_size)),
+                    list(raw_projections.split(batch_size)))
         return list(projections.split(batch_size)), list(crop_scores.split(batch_size))
+
+
+def sigreg(embeddings, num_slices, generator):
+    """SIGReg from Balestriero & LeCun (2025), arXiv:2511.08544, LeJEPA ``MINIMAL.md``.
+
+    Matches its Epps-Pulley statistic, including the batch-size factor and doubled
+    trapezoidal weights on [0, 3]. Autocast is disabled for the complete float32 calculation.
+
+    Args:
+        embeddings: Unnormalised projector outputs [batch_size, dim], with gradients.
+        num_slices: Number of random unit directions to test.
+        generator: Dedicated torch generator on the embeddings' device; never the global generator.
+
+    Returns:
+        Scalar statistic averaged over the random directions.
+    """
+    if generator is None:
+        raise ValueError("SIGReg needs a dedicated random generator")
+    with torch.autocast(device_type=embeddings.device.type, enabled=False):
+        embeddings = embeddings.float()
+        t = torch.linspace(0, 3, SIGREG_INTEGRATION_POINTS, device=embeddings.device, dtype=torch.float32)
+        dt = 3 / (SIGREG_INTEGRATION_POINTS - 1)
+        weights = torch.full_like(t, 2 * dt)
+        weights[[0, -1]] = dt
+        phi = torch.exp(-t.square() / 2)
+        directions = torch.randn(embeddings.shape[-1], num_slices, device=embeddings.device,
+                                 dtype=torch.float32, generator=generator)
+        directions = directions / directions.norm(p=2, dim=0)
+        x_t = (embeddings @ directions).unsqueeze(-1) * t
+        error = (x_t.cos().mean(0) - phi).square() + x_t.sin().mean(0).square()
+        return ((error @ (weights * phi)) * embeddings.shape[0]).mean()
 
 
 class FeatureQueue:

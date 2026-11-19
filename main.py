@@ -88,6 +88,12 @@ def parse_arguments(argv=None):
     swav_settings.add_argument("--epsilon", type=float, default=0.05, help="Sinkhorn entropy regularisation")
     swav_settings.add_argument("--sinkhorn-iterations", type=int, default=3)
     swav_settings.add_argument("--temperature", type=float, default=0.1, help="softmax temperature of the predictions")
+    swav_settings.add_argument("--sigreg-weight", type=float, default=0.0,
+                               help="nonnegative SIGReg weight added to the SwAV loss; 0 disables it. "
+                                    "Corresponds to LeJEPA's lamb / (1 - lamb), but its value does not "
+                                    "transfer: SwAV uses cross-entropy rather than MSE")
+    swav_settings.add_argument("--sigreg-slices", type=int, default=1024,
+                               help="random directions per SIGReg statistic; must be at least 1")
     swav_settings.add_argument("--freeze-prototypes-epochs", type=int, default=1,
                                help="number of initial epochs in which the prototypes are not updated")
     swav_settings.add_argument("--queue-length", type=int, default=0,
@@ -148,6 +154,10 @@ def main(argv=None):
     smallest_area, largest_area = args.local_crop_area
     if not 0 < smallest_area <= largest_area <= 1:
         raise ValueError(f"--local-crop-area {smallest_area} {largest_area} must satisfy 0 < MIN <= MAX <= 1")
+    if not args.sigreg_weight >= 0:
+        raise ValueError("--sigreg-weight must be at least 0")
+    if args.sigreg_slices < 1:
+        raise ValueError("--sigreg-slices must be at least 1")
     args.output.mkdir(parents=True, exist_ok=False)
     device = training.resolve_device(args.device)
     training.seed_everything(args.seed)
@@ -165,18 +175,23 @@ def main(argv=None):
     scheduler = training.make_scheduler(optimizer, args.lr_schedule, args.warmup_epochs * len(loader),
                                         args.epochs * len(loader))
     loss_function = make_loss_function(args)
+    sigreg_generator = (torch.Generator(device=device).manual_seed(args.seed) if args.sigreg_weight > 0 else None)
 
     print(f"training on {device}: {args.epochs} epochs of {len(loader)} steps", flush=True)
     history = []
     for epoch in range(1, args.epochs + 1):
         epoch_start = time.time()
+        loss_parts = {}
         mean_loss = training.train_one_epoch(
             model, loader, optimizer, loss_function, device,
             freeze_prototypes=epoch <= args.freeze_prototypes_epochs,
             queue=queue if epoch >= args.queue_start_epoch else None,
             scheduler=scheduler,
+            sigreg_weight=args.sigreg_weight, sigreg_slices=args.sigreg_slices,
+            sigreg_generator=sigreg_generator, loss_parts=loss_parts,
         )
         record = {"epoch": epoch, "loss": round(mean_loss, 4), "train_seconds": round(time.time() - epoch_start, 1)}
+        record.update({name: round(value, 4) for name, value in loss_parts.items()})
         if is_evaluation_epoch(epoch, args):
             score = training.export_and_evaluate(model, args.output / "model.onnx", args.data)
             record["score"] = round(score, 4)

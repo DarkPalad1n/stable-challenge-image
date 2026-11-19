@@ -11,6 +11,40 @@ import swav_data
 import training
 
 
+def test_sigreg_is_averaged_per_crop_without_changing_the_global_random_stream(eval_data, monkeypatch):
+    torch.manual_seed(0)
+    model = swav.SwAVModel(num_prototypes=10)
+    loader = list(swav_data.make_train_loader(str(eval_data), batch_size=8, seed=0))[:2]
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    generator = torch.Generator().manual_seed(1)
+    regularisers, swav_losses = [], []
+    original_sigreg = swav.sigreg
+
+    def recording_sigreg(raw, slices, random_generator):
+        assert raw.shape == (8, swav.PROJECTION_DIM) and slices == 8
+        assert random_generator is generator and raw.requires_grad
+        before = torch.get_rng_state()
+        loss = original_sigreg(raw, slices, random_generator)
+        assert torch.equal(torch.get_rng_state(), before)
+        regularisers.append(loss.item())
+        return loss
+
+    def loss_function(scores, queue_scores):
+        loss = swav.swav_loss(scores, swav_data.NUM_GLOBAL_CROPS, 0.05, 3, 0.1, queue_scores)
+        swav_losses.append(loss.item())
+        return loss
+
+    monkeypatch.setattr(swav, "sigreg", recording_sigreg)
+    parts = {}
+    total = training.train_one_epoch(model, loader, optimizer, loss_function, torch.device("cpu"), True,
+                                     sigreg_weight=0.1, sigreg_slices=8, sigreg_generator=generator, loss_parts=parts)
+    assert isinstance(total, float)
+    assert len(regularisers) == len(loader) * (swav_data.NUM_GLOBAL_CROPS + swav_data.NUM_LOCAL_CROPS)
+    assert parts["sigreg_loss"] == pytest.approx(sum(regularisers) / len(regularisers))
+    assert parts["swav_loss"] == pytest.approx(sum(swav_losses) / len(swav_losses))
+    assert total == pytest.approx(parts["swav_loss"] + 0.1 * parts["sigreg_loss"])
+
+
 @pytest.mark.parametrize("freeze_prototypes", [True, False])
 def test_prototypes_move_only_when_not_frozen(eval_data, freeze_prototypes):
     torch.manual_seed(0)

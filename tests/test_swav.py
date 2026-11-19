@@ -20,6 +20,92 @@ def random_scores(seed, batch_size=BATCH_SIZE, num_prototypes=NUM_PROTOTYPES):
     return torch.rand(batch_size, num_prototypes, generator=torch.Generator().manual_seed(seed)) * 2 - 1
 
 
+def reference_sigreg(proj, num_slices, generator):
+    """LeJEPA MINIMAL.md, with an explicit CPU generator and configurable slice count."""
+    t = torch.linspace(0, 3, 17, dtype=torch.float32)
+    dt = 3 / (17 - 1)
+    weights = torch.full((17,), 2 * dt, dtype=torch.float32)
+    weights[[0, -1]] = dt
+    window = torch.exp(-t.square() / 2.0)
+    A = torch.randn(proj.size(-1), num_slices, generator=generator)
+    A = A.div_(A.norm(p=2, dim=0))
+    x_t = (proj @ A).unsqueeze(-1) * t
+    err = (x_t.cos().mean(-3) - window).square() + x_t.sin().mean(-3).square()
+    statistic = (err @ (weights * window)) * proj.size(-2)
+    return statistic.mean()
+
+
+def test_sigreg_matches_the_lejepa_reference():
+    embeddings = torch.randn(64, 16, generator=torch.Generator().manual_seed(0))
+    expected = reference_sigreg(embeddings, 32, torch.Generator().manual_seed(1))
+    actual = swav.sigreg(embeddings, 32, torch.Generator().manual_seed(1))
+    torch.testing.assert_close(actual, expected)
+
+
+def test_sigreg_distinguishes_gaussian_and_collapsed_embeddings():
+    normal = torch.randn(2048, 16, generator=torch.Generator().manual_seed(0))
+    collapsed = torch.zeros_like(normal)
+    line = torch.zeros_like(normal)
+    line[:, 0] = normal[:, 0] * 4  # same expected squared norm, but only one active dimension
+    statistic = lambda x: swav.sigreg(x, 64, torch.Generator().manual_seed(1))
+    assert statistic(normal) < 3
+    assert statistic(collapsed) > 10 * statistic(normal)
+    assert statistic(line) > 10 * statistic(normal)
+
+
+def test_sigreg_has_a_scalar_loss_and_input_gradients():
+    embeddings = torch.randn(32, 16, requires_grad=True)
+    loss = swav.sigreg(embeddings, 16, torch.Generator().manual_seed(0))
+    assert loss.ndim == 0 and torch.isfinite(loss)
+    loss.backward()
+    assert torch.isfinite(embeddings.grad).all() and embeddings.grad.abs().sum() > 0
+
+
+def test_sigreg_uses_its_own_random_generator():
+    embeddings = torch.ones(32, 16)
+    generator = torch.Generator().manual_seed(0)
+    global_before, dedicated_before = torch.get_rng_state(), generator.get_state()
+    swav.sigreg(embeddings, 16, generator)
+    assert torch.equal(torch.get_rng_state(), global_before)
+    assert not torch.equal(generator.get_state(), dedicated_before)
+    with pytest.raises(ValueError, match="dedicated"):
+        swav.sigreg(embeddings, 16, None)
+
+
+def test_sigreg_stays_float32_under_autocast():
+    embeddings = torch.randn(32, 16).bfloat16().requires_grad_()
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        actual = swav.sigreg(embeddings, 16, torch.Generator().manual_seed(0))
+    expected = reference_sigreg(embeddings.float(), 16, torch.Generator().manual_seed(0))
+    assert actual.dtype == torch.float32
+    torch.testing.assert_close(actual, expected)
+
+
+def test_raw_projections_are_available_from_one_projector_pass():
+    model = swav.SwAVModel(NUM_PROTOTYPES).eval()
+    crops = random_crops()
+    assert len(model(crops)) == 2
+    calls = []
+    handle = model.projector.register_forward_hook(lambda *args: calls.append(1))
+    projections, scores, raw = model(crops, return_raw=True)
+    handle.remove()
+    assert calls == [1] and len(raw) == len(crops)
+    for normalised, unnormalised in zip(projections, raw):
+        torch.testing.assert_close(normalised, F.normalize(unnormalised, dim=1))
+    default_projections, default_scores = model(crops)
+    for actual, expected in zip(projections + scores, default_projections + default_scores):
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+def test_sigreg_gradient_reaches_backbone_and_projector_but_not_prototypes():
+    model = swav.SwAVModel(NUM_PROTOTYPES)
+    _, _, raw = model(random_crops(), return_raw=True)
+    torch.stack([swav.sigreg(x, 8, torch.Generator().manual_seed(i)) for i, x in enumerate(raw)]).mean().backward()
+    for module in (model.backbone, model.projector):
+        assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in module.parameters())
+    assert model.prototypes.weight.grad is None
+
+
 def reference_sinkhorn(scores, epsilon, num_iterations):
     """Single-process version of distributed_sinkhorn from facebookresearch/swav (main_swav.py)."""
     assignments = torch.exp(scores.double() / epsilon).t()  # [num_prototypes, batch_size]
