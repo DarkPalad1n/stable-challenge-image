@@ -30,6 +30,7 @@ elif [ "${2:-}" = shifts ]; then
 fi
 
 cd "$SLURM_SUBMIT_DIR"
-# The pattern is left unquoted on purpose: the shell expands it to the model files.
-"$HOME/.local/bin/uv" run --locked "$script" runs/hydra-"$name"-s*/$models \
+# The pattern is left unquoted on purpose: the shell expands it to the model files. A digit must follow
+# "-s", so that NAME b128-e800 does not also match runs such as hydra-b128-e800-sigreg0.1-s2.
+"$HOME/.local/bin/uv" run --locked "$script" runs/hydra-"$name"-s[0-9]*/$models \
     --data data/train.parquet --out "$out"
