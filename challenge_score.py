@@ -115,6 +115,11 @@ def challenge_score(model_path, data_path, domain_of_class=DOMAIN_OF_CLASS):
         domains), and "per_domain" with both parts for every domain.
     """
     features, labels = embed_labelled_images(model_path, data_path)
+    return score_features(features, labels, domain_of_class)
+
+
+def score_features(features, labels, domain_of_class=DOMAIN_OF_CLASS):
+    """The challenge-style score of given embeddings of the labelled images; see ``challenge_score``."""
     domains = np.array([domain_of_class[label] for label in labels])
     in_domain = in_domain_accuracy(features, labels, domains)
     few_shot = few_shot_accuracy(features, labels, domains)

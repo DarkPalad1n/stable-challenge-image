@@ -16,6 +16,11 @@ detailed log of the laptop phase (up to 2026-11-10); for everything later, this 
 - **Larger encoder:** a narrow ResNet18 (4.37M parameters) gives the same challenge score as the
   ResNet9 (0.751 each) but a higher `main.py` score (0.762 against 0.748, about 3 SE). The two local
   scores disagree here for the first time; an upload on 2026-11-19 is meant to settle it.
+- **Degraded images:** our trained encoders lose 4-25 points when the labelled images are noisy,
+  blurred, downsampled or JPEG-compressed (one seed per model); an untrained encoder hardly changes.
+  They seem to rely on fine detail. The score averaged over these shifts (0.64-0.66) is much closer
+  to our leaderboard scores (about 0.62) than the clean score (0.76). `shift_score.py` now measures
+  this next to the challenge score (4.5).
 - **Larger local crops** (0.14-0.4 of the image instead of 0.05-0.14) do not help (-0.8, not
   significant) and lower Galaxy10 few-shot by 3.9 points (about 2.5 SE), against our prediction.
 - **Sinkhorn epsilon:** sharper targets learn faster. At 200 epochs epsilon 0.01-0.03 beats the
@@ -66,6 +71,12 @@ loads the data more slowly.
   on new classes as on the leaderboard.
 - **`main.py` score** (`evaluate.py`): one leave-one-out ridge probe over all 750 labelled images.
   It ranks some runs differently because it does not average per domain.
+- **Shift score** (`shift_score.py`, from 2026-11-19): the challenge score on degraded copies of the
+  labelled images (Gaussian noise 0.05 and 0.10, Gaussian blur radius 1 and 2, downsampling to 48 and
+  32 pixels, JPEG quality 20), probes fit and tested on each degraded copy, plus their mean. Fixed
+  seed, so every model sees the same images. The shifts are our choice: the public pre-release
+  evaluator has evaluation splits named `shift_*` (for example noisy images) that it skipped when
+  scoring, and we do not know whether the leaderboard uses such splits.
 - **Seeds:** every configuration is trained with seeds 0-5 (laptop phase: 0-2).
 - **Comparisons:** difference of means with standard error SE = sqrt(s1²/6 + s2²/6). We call a
   difference real when it is at least about 2 SE. A single run varies by about +/-1 point.
@@ -255,6 +266,41 @@ laptop observation that Galaxy10 shares only 4 prototypes (one 30-epoch run) doe
 200-epoch models. The epsilon sweep (4.3) then changed the target sharpness directly: sharper targets
 speed up learning, but do not raise the end point.
 
+### 4.5 Robustness to degraded images (`shift_score.py`)
+
+First measurement on 2026-11-19, one seed per model (the uploaded files; the untrained encoder is
+`make_random_init.py 0`). Challenge score on the clean labelled images, and the change in points under
+each shift:
+
+| Shift | Untrained ResNet9 | `b128-e800` s5 | `b128-e1600` s0 | `b128-e800-r18` s0 |
+|---|---:|---:|---:|---:|
+| Clean | 0.384 | 0.761 | 0.766 | 0.755 |
+| Noise 0.05 | -1.3 | -12.6 | -12.4 | -7.4 |
+| Noise 0.10 | -2.0 | -19.3 | -24.6 | -14.5 |
+| Blur radius 1 | +0.7 | -3.9 | -4.9 | -4.1 |
+| Blur radius 2 | -1.1 | -14.2 | -12.9 | -17.1 |
+| Downsampled to 48 px | -0.4 | -5.3 | -5.4 | -4.6 |
+| Downsampled to 32 px | -0.9 | -12.0 | -9.3 | -9.5 |
+| JPEG quality 20 | -0.1 | -14.5 | -16.8 | -11.4 |
+| **Mean over the shifts** | 0.376 | **0.644** | **0.642** | **0.657** |
+
+- Training makes the encoders sensitive to degraded images: the untrained encoder hardly changes, the
+  trained ones lose up to 25 points. Galaxy10 few-shot suffers most (for `b128-e800` s5 from 0.562 to
+  0.373 under JPEG compression).
+- Our reading, not yet tested: SwAV on clean crops learns to rely on fine, high-frequency detail, and
+  longer training strengthens this (`b128-e1600` loses more under strong noise than `b128-e800`; one
+  seed each). The narrow ResNet18 is more robust to noise and JPEG, and leads on the mean over the
+  shifts although it is slightly behind on clean images.
+- The mean over the shifts (0.64-0.66) lies much closer to our leaderboard scores (0.55-0.62) than the
+  clean score does. If the leaderboard includes degraded images, this would explain why the
+  leaderboard compresses our local gains and why five changes that did not raise the clean score
+  plateau also did not move the leaderboard. This is a hypothesis.
+- Prediction, fixed before its refresh: if degraded images matter on the leaderboard, the ResNet18
+  upload of 2026-11-19 lands above the 1600-epoch upload (0.6233), unlike what the clean-score line
+  predicts (0.612).
+- Next test: augment the training crops with such degradations, so that the encoder cannot rely on
+  fine detail alone, and compare clean and shift scores.
+
 ## 5. Leaderboard uploads
 
 Only the latest upload counts. All uploads so far come from one participant ID. `uploads.json` holds
@@ -317,7 +363,9 @@ Correlation over the four scored uploads (`proxy_validation.py report`):
    few-shot part.
 6. **Group:** one shared encoder, one scorer and one `main.py`; agree on the final model and on who
    uploads, since only the latest upload counts. The best model must be uploaded again last.
-7. **Step-matched batch control:** open. Batch 32 for 200 epochs makes as many optimiser steps as
+7. **Robustness (branch `robustness`):** the shift score is in place (4.5). Next: a training-time
+   degradation augmentation, judged by clean and shift score together.
+8. **Step-matched batch control:** open. Batch 32 for 200 epochs makes as many optimiser steps as
    batch 128 for 800.
 
 ## 7. Practical notes on Hydra
@@ -325,7 +373,8 @@ Correlation over the four scored uploads (`proxy_validation.py report`):
 - `sbatch cluster/train_seeds.sh NAME [main.py options]` trains seeds 0-5 as a job array with one GPU
   per seed (4 CPUs, 16 GB RAM, `--num-workers 4`, an evaluation every 5 epochs) and writes
   `runs/hydra-NAME-sSEED/`. `sbatch cluster/score_models.sh NAME` then scores the six models in one CPU
-  job (`NAME curve`: every kept model), and `uv run cluster/summarize.py` prints mean, standard
+  job (`NAME curve`: every kept model; `NAME shifts`: the shift score of the final models, about 10
+  minutes), and `uv run cluster/summarize.py` prints mean, standard
   deviation, minimum and maximum per configuration (`--curve NAME`: per evaluated epoch).
 - GPUs for batch 128: Titan RTX (24 GB, about 38 s per epoch), L40 (about 17 s), RTX A6000 (about
   20 s); the L40, L40S and A6000 are often fully booked. The RTX 2080 Ti (11 GB) runs out of memory
