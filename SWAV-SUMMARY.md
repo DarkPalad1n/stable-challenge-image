@@ -1,4 +1,4 @@
-# SwAV track: summary of all experiments (as of 2026-11-18)
+# SwAV track: summary of all experiments (as of 2026-11-19)
 
 Pascal's SwAV track for the image challenge. This file collects everything done so far in one
 place: setup, how we measure, every ablation, and the leaderboard uploads. `PROGRESS.md` holds the
@@ -10,18 +10,25 @@ detailed log of the laptop phase (up to 2026-11-10); for everything later, this 
   score 0.751 +/- 0.007 over seeds 0-5 (untrained encoder: 0.386 +/- 0.011). 1600 epochs give
   0.759 +/- 0.010, a gain of +0.8 points that is not significant (about 1.6 SE), so 800 epochs is the
   working default from 2026-11-16 on.
-- **Plateau:** every long run ends at about 0.75-0.76: 800 or 1600 epochs, Sinkhorn epsilon 0.05 or
-  0.03. A cosine schedule ends lower (0.737). Training seems exhausted for this encoder; the next test
-  is a larger encoder (section 6).
+- **Plateau:** every long run ends at about 0.75-0.76, whatever we change: 800 or 1600 epochs,
+  Sinkhorn epsilon 0.05 or 0.03, larger local crops, or a larger encoder (narrow ResNet18). A cosine
+  schedule ends lower (0.737). Two of these changes only speed up the start.
+- **Larger encoder:** a narrow ResNet18 (4.37M parameters) gives the same challenge score as the
+  ResNet9 (0.751 each) but a higher `main.py` score (0.762 against 0.748, about 3 SE). The two local
+  scores disagree here for the first time; an upload on 2026-11-19 is meant to settle it.
+- **Larger local crops** (0.14-0.4 of the image instead of 0.05-0.14) do not help (-0.8, not
+  significant) and lower Galaxy10 few-shot by 3.9 points (about 2.5 SE), against our prediction.
 - **Sinkhorn epsilon:** sharper targets learn faster. At 200 epochs epsilon 0.01-0.03 beats the
   paper's 0.05 by about 3 points (about 7 SE); at 800 epochs the difference is gone (+0.3). Epsilon
   0.1 collapses (0.270, below the untrained encoder), as the SwAV paper warns.
 - **Leaderboard:** four scored uploads. The local scores rank them in the same order as the
   leaderboard (Spearman 1.0; Pearson 0.96 for the challenge score, 0.99 for the `main.py` score), but
   the leaderboard compresses differences: one local point is worth about 0.4-0.5 leaderboard points.
-  The latest upload (1600 epochs, seed 0) scores 0.6233; we predicted 0.61-0.63 before the refresh.
+  The 1600-epoch upload (seed 0) scored 0.6233; we predicted 0.61-0.63 before the refresh. The
+  ResNet18 upload of 2026-11-19 is not scored yet.
 - **What hurts:** stronger colour jitter (-2.3), blur (-1.4), learning rate 1e-3 instead of 5e-4
-  (-2.2), a feature queue (-3.6, laptop phase), cosine decay instead of a constant rate (-1.4).
+  (-2.2), a feature queue (-3.6, laptop phase), cosine decay instead of a constant rate (-1.4); larger
+  local crops for Galaxy10 few-shot (-3.9).
 - **No measurable effect:** 100 or 1000 prototypes instead of 300; batch 256 at 30 epochs.
 - **Weakest domain:** Galaxy10 (0.52 in-domain, 0.43 few-shot at `b128-e200`, against 0.73-0.85 for
   the others).
@@ -30,7 +37,7 @@ detailed log of the laptop phase (up to 2026-11-10); for everything later, this 
 
 | Setting | Value |
 |---|---|
-| Encoder | ResNet9 (`stable_pretraining.backbone.Resnet9`), 1024-dim output, 3.49M parameters, 13.3 MiB ONNX (cap 20 MiB). Option `--backbone resnet18-narrow` (branch `resnet18`): ResNet18 layout with stages of 40-80-160-320 channels, 3x3 stem, 320-dim output zero-padded to 1024, 4.37M parameters, 16.6 MiB ONNX; untested so far |
+| Encoder | ResNet9 (`stable_pretraining.backbone.Resnet9`), 1024-dim output, 3.49M parameters, 13.3 MiB ONNX (cap 20 MiB). Option `--backbone resnet18-narrow` (branch `resnet18`): ResNet18 layout with stages of 40-80-160-320 channels, 3x3 stem, BatchNorm momentum 0.9 as in the ResNet9, 320-dim output zero-padded to 1024, 4.37M parameters, 16.7 MiB ONNX (results in 4.2) |
 | Head | Projector 1024-1024-128, then prototypes (default 300) |
 | Crops | 2 global (96 px, scale 0.14-1) + 4 local (48 px, scale 0.05-0.14; set with `--local-crop-area`) |
 | Augmentation | Colour jitter 0.4, 0.4, 0.2, 0.1 (p = 0.8), grayscale; no blur, no solarize |
@@ -112,13 +119,15 @@ Floor: the untrained ResNet9 for seeds 0-5 (`make_random_init.py`, CPU, so the s
 start of every Hydra run of that seed) scores 0.386 +/- 0.011 (challenge) and 0.366 (`main.py`). For
 seeds 0-2 the files are byte-identical to the laptop ones.
 
-### 4.2 Second wave, 2026-11-12 to 2026-11-18 (all batch 128, means over seeds 0-5)
+### 4.2 Second wave, 2026-11-12 to 2026-11-19 (all batch 128, means over seeds 0-5)
 
 | Configuration | Changed setting | Challenge score | `main.py` score | GPU |
 |---|---|---:|---:|---|
 | `b128-e1600` | 1600 epochs | 0.759 +/- 0.010 | 0.754 +/- 0.011 | Titan RTX (s0-2), RTX A6000 (s3-5) |
 | `b128-e800-eps0.03` | 800 epochs, epsilon 0.03 | 0.754 +/- 0.005 | 0.746 +/- 0.011 | Titan RTX |
+| `b128-e800-r18` | 800 epochs, narrow ResNet18 encoder | 0.751 +/- 0.007 | **0.762 +/- 0.005** | L40 (s0-2), RTX A6000 (s3-5) |
 | `b128-e800` | 800 epochs | **0.751 +/- 0.007** | 0.748 +/- 0.009 | Titan RTX (s0-4), L40 (s5) |
+| `b128-e800-local0.14-0.4` | 800 epochs, local crops 0.14-0.4 of the image | 0.742 (5 seeds) | not read | L40 (s0-3), Titan RTX (s5) |
 | `b128-e800-cos` | 800 epochs, 10 warm-up epochs, cosine decay to 0 | 0.737 +/- 0.009 | 0.731 +/- 0.006 | RTX A6000 (s0-2), L40 (s3-5) |
 | `b128-e200-eps0.02` | epsilon 0.02 | 0.715 +/- 0.007 | 0.721 +/- 0.007 | Titan RTX |
 | `b128-e200-eps0.03` | epsilon 0.03 | 0.715 +/- 0.007 | 0.714 +/- 0.008 | Titan RTX |
@@ -126,7 +135,25 @@ seeds 0-2 the files are byte-identical to the laptop ones.
 | `b128-e200` (from 4.1) | epsilon 0.05 (default) | 0.683 +/- 0.009 | 0.684 +/- 0.008 | Titan RTX |
 | `b128-e200-eps0.1` | epsilon 0.1 | 0.270 +/- 0.020 | 0.264 +/- 0.021 | RTX A6000, Titan RTX |
 
-Per-domain scores were not read for this wave.
+`b128-e800-local0.14-0.4` uses seeds 0-3 and 5. Seed 4 is left out: its cluster job was restarted, so
+its run is not certain to be complete.
+
+Untrained narrow ResNet18 (floor, `make_random_init.py SEED resnet18-narrow`, seeds 0-5, the same
+weights the runs start from): challenge score 0.366 +/- 0.010, against 0.386 +/- 0.011 for the ResNet9.
+
+Per domain at 800 epochs (challenge score parts, means over seeds; difference to `b128-e800` in points,
+SE in brackets):
+
+| Domain, part | `b128-e800` | `b128-e800-local0.14-0.4` (5 seeds) | `b128-e800-r18` |
+|---|---:|---:|---:|
+| EuroSAT in-domain | 0.883 | 0.881 (-0.1, 0.6) | 0.890 (+0.8, 0.6) |
+| EuroSAT few-shot | 0.874 | 0.866 (-0.7, 0.5) | 0.875 (+0.1, 0.4) |
+| Galaxy10 in-domain | 0.582 | 0.590 (+0.8, 1.3) | 0.591 (+0.9, 1.1) |
+| Galaxy10 few-shot | 0.548 | **0.509 (-3.9, 1.6)** | 0.548 (-0.0, 1.2) |
+| Imagenette in-domain | 0.804 | 0.804 (-0.1, 1.0) | 0.810 (+0.5, 0.8) |
+| Imagenette few-shot | 0.812 | 0.803 (-0.9, 0.5) | **0.792 (-2.0, 0.3)** |
+
+Per-domain scores of the other second-wave runs were not read.
 
 Training curves (challenge score, means over seeds 0-5, every 50 epochs for the 800-epoch runs and
 every 100 for `b128-e1600`):
@@ -136,6 +163,7 @@ every 100 for `b128-e1600`):
 | `b128-e800` | 0.535 | 0.604 | 0.684 | 0.717 | 0.730 | 0.738 | 0.743 | 0.748 | 0.751 | | | | |
 | `b128-e800-eps0.03` | 0.614 | 0.675 | 0.713 | 0.731 | 0.737 | 0.739 | 0.747 | 0.747 | 0.754 | | | | |
 | `b128-e800-cos` | 0.558 | 0.629 | 0.691 | 0.718 | 0.732 | 0.738 | 0.737 | 0.737 | 0.737 | | | | |
+| `b128-e800-r18` | 0.539 | 0.604 | 0.677 | 0.710 | 0.728 | 0.734 | 0.746 | 0.747 | 0.751 | | | | |
 | `b128-e1600` | | 0.604 | 0.683 | 0.713 | 0.729 | 0.738 | 0.744 | 0.745 | 0.749 | 0.751 | 0.756 | 0.762 | 0.759 |
 
 The cosine curve's points before epoch 800 are not runs of that length: its learning rate depends on
@@ -162,6 +190,8 @@ the planned 800 epochs.
 | | `eps0.01` vs `b128-e200` | +2.8 (0.4) | Helps; same as 0.02 and 0.03 within noise |
 | | `eps0.1` vs `b128-e200` | -41.3 (0.9) | Collapse, below the untrained encoder |
 | Sinkhorn epsilon at 800 epochs? | `b128-e800-eps0.03` vs `b128-e800` | +0.3 (0.4) | No measurable difference |
+| Larger local crops? | `b128-e800-local0.14-0.4` (5 seeds) vs `b128-e800` | -0.8 (0.5) | No measurable difference overall; Galaxy10 few-shot -3.9 (1.6) |
+| Larger encoder? | `b128-e800-r18` vs `b128-e800` | +0.1 (0.4) | No difference by challenge score; `main.py` score +1.4 (0.4) |
 | Number of prototypes? | `k100-e30` vs `baseline-e30` | -0.6 (0.6) | No measurable difference |
 | | `k1000-e30` vs `baseline-e30` | -1.0 (0.8) | No measurable difference |
 | Blur? | `blur-e30` vs `baseline-e30` | -1.4 (0.5) | Hurts, mostly few-shot |
@@ -186,9 +216,24 @@ Notes on interpretation:
   not tested separately) and stops improving at about epoch 400, while the constant rate still gains
   2 points. A guess, not tested: the model still learns at epoch 400, and cosine lowers the rate
   towards 0 before it is done.
-- **Plateau.** No setting tried so far ends above about 0.76: neither twice the epochs nor sharper
-  targets. Our reading is that this encoder (or the 7,500 training images) sets the limit, not the
-  optimisation. This is an inference; the next test is a larger encoder.
+- **Local crops.** Hypothesis: 8 of the 10 loss terms predict a target from a local crop, and at
+  5-14% of a 96-pixel image a local crop covers only 21-36 pixels (in the paper's 224-pixel images,
+  50-84), so it may miss the structure, above all of the galaxies. Prediction, fixed before the run:
+  larger local crops raise the end point by at least 2 SE, most on Galaxy10. Result: the run leads
+  early (curve over all six seeds: +4.8 at epoch 50) and ends 0.8 lower, and Galaxy10 few-shot drops
+  by 3.9 points. The prediction failed in the opposite direction. A guess, not tested: predicting the
+  whole image from a small crop is what makes the encoder learn the fine galaxy structure; larger
+  local crops overlap the range of the global crops (0.14-1) and make the task easier.
+- **Larger encoder.** Prediction, fixed before the run: if capacity sets the limit, the narrow
+  ResNet18 ends at least 2 SE above 0.751. Result: 0.751, the same; its curve is a little slower
+  early and meets the ResNet9 curve from epoch 400 on. The `main.py` score, however, rises by 1.4
+  points (about 3 SE). The per-domain table shows why the two scores disagree: the ResNet18 is
+  slightly better in-domain everywhere, but 2.0 points worse on Imagenette few-shot, and the challenge
+  score gives few-shot half the weight. A guess, not tested: the ResNet18 outputs 320 features instead
+  of 1024, which may matter for a probe fit on 10 images per class.
+- **Plateau.** No setting tried so far ends above about 0.76: neither twice the epochs, sharper
+  targets, larger local crops nor a larger encoder. Our reading is that the 7,500 training images or
+  SwAV itself set the limit at this size. This is an inference, not a measured result.
 
 ### 4.4 Diagnostics (`swav_diagnostics.py`)
 
@@ -223,8 +268,9 @@ one record per upload (file hash, both local scores, the leaderboard score once 
 | 2026-11-13 | `b128-e800`, seed 5 | 0.761 | 0.744 | 0.6157 |
 | 2026-11-14 | `b128-e800`, seed 5, kept model of epoch 100 | 0.592 | 0.616 | 0.5520 |
 | 2026-11-16 | `b128-e1600`, seed 0 | 0.766 | 0.768 | 0.6233 |
+| 2026-11-19 | `b128-e800-r18`, seed 0 (narrow ResNet18) | 0.755 | 0.765 | Pending |
 
-All files passed `test_submission.py` (13.3 MiB). The 2026-11-12 seed was the best of six by local
+All files passed `test_submission.py` (13.3 MiB; the ResNet18 16.7 MiB). The 2026-11-12 seed was the best of six by local
 score; the 2026-11-13 seed was the first to finish; from 2026-11-16 on we upload seed 0 by rule. The
 epoch-100 model was uploaded on purpose as a weaker point, to spread the local scores for the
 correlation.
@@ -243,18 +289,18 @@ Correlation over the four scored uploads (`proxy_validation.py report`):
   classes, our scorer tests images seen in training.
 - Before the 2026-11-17 refresh we predicted 0.61-0.63 for the 1600-epoch upload from a line through
   the first three points; it scored 0.6233.
+- For the ResNet18 upload the two lines predict different scores, fixed before the refresh: 0.612
+  from the challenge score, 0.623 from the `main.py` score. The gap is only about 1 point, since seed 0
+  happens to have a `main.py` score close to the previous upload.
 - Four points are weak evidence. More points, for example from the group's other methods scored with
   the same `challenge_score.py`, would make the check stronger.
 
 ## 6. Open points and next steps
 
-1. **Larger encoder (decided 2026-11-18).** Replace the ResNet9 with a randomly initialised, narrowed
-   ResNet18, trained from scratch with SwAV. The standard ResNet18 (widths 64-512, 11.2M parameters,
-   about 43 MiB) is over the 20 MiB cap. A version with widths 40-80-160-320 and a 3x3 stride-1 stem,
-   as used in the group's DINO track, has about 4.37M parameters (about 16.7 MiB) and about 1.96 GMACs
-   per 96 px image, against 2.57 for our ResNet9 (estimates, not measured on an export). Sharing the
-   exact backbone code with the group makes the method comparison fair. Needs a code change: an
-   encoder option in `swav.py` and `main.py`.
+1. **Encoder choice.** The narrow ResNet18 (branch `resnet18`) is done and tested; `main` keeps the
+   ResNet9. By challenge score both are equal, by `main.py` score the ResNet18 is better. The
+   leaderboard score of the 2026-11-19 upload decides which local score to trust here. The group's DINO
+   track describes the same layout; sharing the exact code with the group is still open.
 2. **`main.py` defaults:** still batch 128 and 200 epochs. To change to 800 epochs (decision
    2026-11-16). Epsilon can stay at the paper's 0.05, since 0.03 makes no difference at 800 epochs.
    Still to do: confirm the recipe exactly as handed in (defaults, so no loader workers) once with
@@ -266,7 +312,9 @@ Correlation over the four scored uploads (`proxy_validation.py report`):
    the images, probe on the rest, rotating over 6 folds instead of 6 seeds) would match the
    leaderboard better at the same cost. New classes cannot be simulated: 90% of the images have no
    label, so we cannot remove a class from training.
-5. **Galaxy10** is still the weakest domain and a third of the score.
+5. **Galaxy10** is still the weakest domain and a third of the score (0.582 in-domain, 0.548 few-shot
+   at 800 epochs). Neither the larger encoder nor larger local crops help it; the larger crops hurt its
+   few-shot part.
 6. **Group:** one shared encoder, one scorer and one `main.py`; agree on the final model and on who
    uploads, since only the latest upload counts. The best model must be uploaded again last.
 7. **Step-matched batch control:** open. Batch 32 for 200 epochs makes as many optimiser steps as
