@@ -50,7 +50,16 @@
     "sha256": "0caf4d16480a88404c4c8f6f83f19dd150c534d0917b554f6c5c73a83d8c06e3",
     "challenge_score": 0.7551,
     "main_score": 0.7653,
-    "leaderboard_score": null,
+    "leaderboard_score": 0.6173,
     "note": "narrow ResNet18 backbone; predicted 0.612 (challenge fit) vs 0.623 (main.py fit)"
+  },
+  {
+    "date": "2026-11-20",
+    "name": "b128-e800-degrade0.3-s0",
+    "sha256": "dd2fa472a034f8e727aba526f8c3e28134561d8ccac225568fb5402fb2c88575",
+    "challenge_score": 0.7646,
+    "main_score": 0.7667,
+    "leaderboard_score": null,
+    "note": "degradation p=0.3, seed 0 by rule; predicted ~0.62 (clean-score fits) vs >= 0.64 if degraded images count on the leaderboard"
   }
 ]
