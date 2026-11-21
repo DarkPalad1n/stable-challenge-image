@@ -59,7 +59,7 @@
     "sha256": "dd2fa472a034f8e727aba526f8c3e28134561d8ccac225568fb5402fb2c88575",
     "challenge_score": 0.7646,
     "main_score": 0.7667,
-    "leaderboard_score": null,
+    "leaderboard_score": 0.6397,
     "note": "degradation p=0.3, seed 0 by rule; predicted ~0.62 (clean-score fits) vs >= 0.64 if degraded images count on the leaderboard"
   }
 ]
